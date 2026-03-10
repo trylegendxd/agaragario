@@ -1,0 +1,141 @@
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: Ubuntu, Arial, sans-serif;
+  background: #ffffff;
+}
+
+canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  background: #ffffff;
+  cursor: crosshair;
+}
+
+.menu {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.panel {
+  width: 350px;
+  background: #fff;
+  border: 1px solid #d7d7d7;
+  border-radius: 6px;
+  padding: 18px;
+  text-align: center;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.12);
+}
+
+.panel h1 {
+  margin: 0 0 10px;
+  font-size: 46px;
+  color: #333;
+}
+
+.panel p {
+  margin: 0 0 12px;
+  color: #777;
+  font-size: 14px;
+}
+
+.panel input,
+.panel button {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 12px;
+  font-size: 16px;
+  border-radius: 4px;
+  margin-top: 10px;
+  font-family: inherit;
+}
+
+.panel input {
+  border: 1px solid #ccc;
+  outline: none;
+}
+
+.panel button {
+  border: 1px solid #3a9f24;
+  background: linear-gradient(#5fda4c, #46c734);
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.smallInfo {
+  margin-top: 10px;
+  color: #999;
+  font-size: 12px;
+}
+
+.hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+.massBox {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  min-width: 88px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #d5d5d5;
+  border-radius: 4px;
+  padding: 8px 10px 6px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.08);
+}
+
+.massLabel {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.massValue {
+  font-size: 38px;
+  line-height: 1;
+  font-weight: 700;
+  color: #555;
+}
+
+.leaderboard {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  width: 220px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid #d3d3d3;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.leaderboardTitle {
+  background: #f3f3f3;
+  border-bottom: 1px solid #ddd;
+  padding: 8px 10px;
+  font-size: 28px;
+  font-weight: 700;
+  color: #555;
+  text-align: center;
+}
+
+.leaderboardEntries {
+  padding: 8px 12px 10px;
+  color: #444;
+  font-size: 14px;
+}
+
+.leaderboardEntries div {
+  margin: 4px 0;
+}

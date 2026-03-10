@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agar.io Online Prototype</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div class="hud">
+    <div class="massBox">
+      <div class="massLabel">Mass</div>
+      <div class="massValue" id="massValue">0</div>
+    </div>
+
+    <div class="leaderboard">
+      <div class="leaderboardTitle">Leaderboard</div>
+      <div class="leaderboardEntries" id="leaderboardEntries"></div>
+    </div>
+  </div>
+
+  <div class="menu" id="menu">
+    <div class="panel">
+      <h1>Agar.io</h1>
+      <p>Enter your nickname and join the server.</p>
+      <input id="nameInput" type="text" maxlength="16" placeholder="Nickname" value="Player" />
+      <button id="playBtn">Play</button>
+      <div class="smallInfo">
+        Move mouse to move · Space to split · W to eject mass
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/game.js"></script>
+</body>
+</html>
