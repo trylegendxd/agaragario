@@ -14,7 +14,7 @@ app.use(express.static(path.join(__dirname, "public")));
 const WORLD_SIZE = 12000;
 const FOOD_COUNT = 1800;
 const VIRUS_COUNT = 35;
-const TICK_RATE = 30;
+const TICK_RATE = 20;
 const MAX_CELLS = 16;
 
 const players = new Map();
@@ -418,3 +418,4 @@ setInterval(() => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
 });
+
