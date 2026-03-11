@@ -66,19 +66,15 @@ function totalMass(player) {
   return player.cells.reduce((sum, c) => sum + c.mass, 0);
 }
 
-function playerCenter(player) {
-  let total = 0;
-  let sx = 0;
-  let sy = 0;
-
-  for (const cell of player.cells) {
-    total += cell.mass;
-    sx += cell.x * cell.mass;
-    sy += cell.y * cell.mass;
-  }
-
-  if (total <= 0) return { x: 0, y: 0 };
-  return { x: sx / total, y: sy / total };
+function respawnCell() {
+  return {
+    x: rand(-150, 150),
+    y: rand(-150, 150),
+    mass: 30,
+    vx: 0,
+    vy: 0,
+    mergeTimer: 0
+  };
 }
 
 function createPlayer(id, name) {
@@ -89,16 +85,7 @@ function createPlayer(id, name) {
     mouse: { x: 0, y: 0 },
     wantsSplit: false,
     wantsEject: false,
-    cells: [
-      {
-        x: rand(-1000, 1000),
-        y: rand(-1000, 1000),
-        mass: 30,
-        vx: 0,
-        vy: 0,
-        mergeTimer: 0
-      }
-    ]
+    cells: [respawnCell()]
   };
 }
 
@@ -321,16 +308,9 @@ function handlePlayerVsPlayer() {
     }
   }
 
-  for (const [id, player] of players) {
+  for (const player of players.values()) {
     if (player.cells.length === 0) {
-      player.cells.push({
-        x: rand(-1000, 1000),
-        y: rand(-1000, 1000),
-        mass: 30,
-        vx: 0,
-        vy: 0,
-        mergeTimer: 0
-      });
+      player.cells.push(respawnCell());
     }
   }
 }
@@ -376,14 +356,18 @@ function buildSnapshot() {
     leaderboard: playerList.slice(0, 10).map((p) => ({
       name: p.name,
       mass: p.totalMass
-    }))
+    })),
+    debugPlayerCount: players.size
   };
 }
 
 io.on("connection", (socket) => {
+  console.log("socket connected:", socket.id);
+
   socket.on("join", (name) => {
     const player = createPlayer(socket.id, name);
     players.set(socket.id, player);
+    console.log("joined:", socket.id, name, "total players:", players.size);
   });
 
   socket.on("input", (input) => {
@@ -398,6 +382,7 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     players.delete(socket.id);
+    console.log("disconnected:", socket.id, "total players:", players.size);
   });
 });
 
