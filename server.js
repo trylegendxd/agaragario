@@ -12,10 +12,13 @@ const PORT = process.env.PORT || 3000;
 app.use(express.static(path.join(__dirname, "public")));
 
 const WORLD_SIZE = 12000;
-const FOOD_COUNT = 1800;
+const FOOD_COUNT = 1000;
 const VIRUS_COUNT = 35;
 const TICK_RATE = 20;
 const MAX_CELLS = 16;
+
+// How far beyond the visible area to still send entities
+const SNAPSHOT_PADDING = 800;
 
 const players = new Map();
 const food = [];
@@ -64,6 +67,21 @@ function createVirus() {
 
 function totalMass(player) {
   return player.cells.reduce((sum, c) => sum + c.mass, 0);
+}
+
+function playerCenter(player) {
+  let total = 0;
+  let sx = 0;
+  let sy = 0;
+
+  for (const cell of player.cells) {
+    total += cell.mass;
+    sx += cell.x * cell.mass;
+    sy += cell.y * cell.mass;
+  }
+
+  if (total <= 0) return { x: 0, y: 0 };
+  return { x: sx / total, y: sy / total };
 }
 
 function respawnCell() {
@@ -333,9 +351,55 @@ function handleSelfMerge(player) {
   }
 }
 
-function buildSnapshot() {
-  const playerList = [...players.values()]
+function buildLeaderboard() {
+  return [...players.values()]
     .map((p) => ({
+      name: p.name,
+      mass: Math.round(totalMass(p))
+    }))
+    .sort((a, b) => b.mass - a.mass)
+    .slice(0, 10);
+}
+
+function buildSnapshotFor(targetPlayer) {
+  const center = playerCenter(targetPlayer);
+  const total = totalMass(targetPlayer);
+  const biggestCellMass = targetPlayer.cells.length
+    ? Math.max(...targetPlayer.cells.map((c) => c.mass))
+    : total;
+
+  const biggestRadius = radiusFromMass(biggestCellMass);
+
+  // Approx visible radius
+  const visibleRadius = Math.max(2200, biggestRadius * 6 + SNAPSHOT_PADDING);
+
+  const visibleFood = [];
+  for (const f of food) {
+    if (Math.abs(f.x - center.x) > visibleRadius) continue;
+    if (Math.abs(f.y - center.y) > visibleRadius) continue;
+    visibleFood.push(f);
+  }
+
+  const visibleViruses = [];
+  for (const v of viruses) {
+    if (Math.abs(v.x - center.x) > visibleRadius) continue;
+    if (Math.abs(v.y - center.y) > visibleRadius) continue;
+    visibleViruses.push(v);
+  }
+
+  const visiblePlayers = [];
+  for (const p of players.values()) {
+    const pCenter = playerCenter(p);
+
+    if (
+      p.id !== targetPlayer.id &&
+      Math.abs(pCenter.x - center.x) > visibleRadius &&
+      Math.abs(pCenter.y - center.y) > visibleRadius
+    ) {
+      continue;
+    }
+
+    visiblePlayers.push({
       id: p.id,
       name: p.name,
       color: p.color,
@@ -345,18 +409,17 @@ function buildSnapshot() {
         y: c.y,
         mass: c.mass
       }))
-    }))
-    .sort((a, b) => b.totalMass - a.totalMass);
+    });
+  }
+
+  visiblePlayers.sort((a, b) => a.totalMass - b.totalMass);
 
   return {
     worldSize: WORLD_SIZE,
-    food,
-    viruses,
-    players: playerList,
-    leaderboard: playerList.slice(0, 10).map((p) => ({
-      name: p.name,
-      mass: p.totalMass
-    })),
+    food: visibleFood,
+    viruses: visibleViruses,
+    players: visiblePlayers,
+    leaderboard: buildLeaderboard(),
     debugPlayerCount: players.size
   };
 }
@@ -412,10 +475,13 @@ setInterval(() => {
 
   handlePlayerVsPlayer();
 
-  io.sockets.emit("state", buildSnapshot());
+  for (const [id, player] of players.entries()) {
+    const socket = io.sockets.sockets.get(id);
+    if (!socket) continue;
+    socket.emit("state", buildSnapshotFor(player));
+  }
 }, 1000 / TICK_RATE);
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
 });
-
