@@ -3,37 +3,910 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Agar.io Online Prototype</title>
-  <link rel="stylesheet" href="/style.css" />
+  <title>Simple Agar.io Style</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: Ubuntu, Arial, sans-serif;
+      background: #ffffff;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      cursor: crosshair;
+      background: #ffffff;
+    }
+
+    .menu {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at center,#ffffff,#e9e9e9);
+    }
+
+    .panel {
+      background: linear-gradient(180deg,#ffffff,#f4f4f4);
+      border: 1px solid #d9d9d9;
+      border-radius: 10px;
+      padding: 22px;
+      width: 380px;
+      text-align: center;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.18), inset 0 0 12px rgba(0,0,0,0.05);
+      position: relative;
+    }
+
+    h1 {
+      margin: 0 0 12px 0;
+      font-size: 64px;
+      line-height: 1;
+      font-weight: 900;
+      letter-spacing: 2px;
+      background: linear-gradient(180deg,#7CFF5E,#28c400);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      text-shadow: 0 0 12px rgba(80,255,80,0.6), 0 0 28px rgba(40,200,0,0.45);
+    }
+
+    p {
+      color: #777;
+      font-size: 14px;
+      margin: 0 0 14px 0;
+    }
+
+    input, button {
+      width: 100%;
+      padding: 10px 12px;
+      font-size: 16px;
+      border-radius: 4px;
+      margin-top: 10px;
+      box-sizing: border-box;
+      font-family: inherit;
+    }
+
+    input {
+      border: 1px solid #cfcfcf;
+      outline: none;
+    }
+
+    button {
+      border: 1px solid #3a9f24;
+      background: linear-gradient(#5fda4c, #46c734);
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .hud {
+      position: fixed;
+      left: 16px;
+      bottom: 16px;
+      min-width: 78px;
+      background: rgba(255,255,255,0.9);
+      border: 1px solid #d7d7d7;
+      border-radius: 3px;
+      padding: 8px 10px 6px;
+      color: #333;
+      box-shadow: 0 1px 6px rgba(0,0,0,0.08);
+    }
+
+    .massLabel {
+      font-size: 11px;
+      color: #8a8a8a;
+      margin-bottom: 2px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .massValue {
+      font-size: 38px;
+      font-weight: 700;
+      line-height: 1;
+      color: #555;
+    }
+
+    .leaderboard {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      width: 220px;
+      background: rgba(255,255,255,0.95);
+      border: 1px solid #cfcfcf;
+      border-radius: 4px;
+      padding: 0;
+      color: #333;
+      font-size: 14px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      overflow: hidden;
+    }
+
+    .leaderboardTitle {
+      background: #f3f3f3;
+      border-bottom: 1px solid #d9d9d9;
+      padding: 8px 10px;
+      font-size: 28px;
+      font-weight: 700;
+      text-align: center;
+      color: #555;
+    }
+
+    .leaderboardEntries {
+      padding: 8px 12px 10px;
+    }
+
+    .leaderboardEntries div {
+      margin: 4px 0;
+      color: #444;
+    }
+
+    .agarioTag {
+      position: fixed;
+      left: 16px;
+      top: 16px;
+      background: rgba(255,255,255,0.9);
+      border: 1px solid #d8d8d8;
+      border-radius: 4px;
+      padding: 6px 10px;
+      font-size: 13px;
+      color: #666;
+    }
+
+    .cheatMenu {
+      position: fixed;
+      left: 16px;
+      top: 52px;
+      width: 250px;
+      background: rgba(255,255,255,0.96);
+      border: 1px solid #cfcfcf;
+      border-radius: 4px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      padding: 10px;
+      color: #444;
+      font-size: 13px;
+      display: none;
+      z-index: 10;
+    }
+
+    .cheatMenu h3 {
+      margin: 0 0 8px 0;
+      font-size: 16px;
+      color: #333;
+    }
+
+    .cheatRow {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .cheatBtn {
+      width: 100%;
+      margin-top: 0;
+      padding: 8px 8px;
+      font-size: 13px;
+      border-radius: 4px;
+      border: 1px solid #cfcfcf;
+      background: #f7f7f7;
+      color: #333;
+      cursor: pointer;
+    }
+
+    .cheatInfo {
+      margin-top: 8px;
+      color: #777;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+  </style>
 </head>
 <body>
   <canvas id="game"></canvas>
 
-  <div class="hud">
-    <div class="massBox">
-      <div class="massLabel">Mass</div>
-      <div class="massValue" id="massValue">0</div>
-    </div>
+  <div class="agarioTag">Agar.io prototype · movement sandbox · C opens test menu</div>
 
-    <div class="leaderboard">
-      <div class="leaderboardTitle">Leaderboard</div>
-      <div class="leaderboardEntries" id="leaderboardEntries"></div>
+  <div class="cheatMenu" id="cheatMenu">
+    <h3>Test Menu</h3>
+    <div class="cheatRow">
+      <button class="cheatBtn" id="massUpBtn">+500 Mass</button>
+      <button class="cheatBtn" id="massDownBtn">-200 Mass</button>
     </div>
+    <div class="cheatRow">
+      <button class="cheatBtn" id="spawnFoodBtn">More Food</button>
+      <button class="cheatBtn" id="spawnVirusBtn">Spawn Virus</button>
+    </div>
+        <div class="cheatRow">
+      <button class="cheatBtn" id="godModeBtn">Toggle Safe Mode</button>
+      <button class="cheatBtn" id="teleportBtn">Teleport Center</button>
+    </div>
+    <div class="cheatRow">
+      <button class="cheatBtn" id="refillBtn">Refill World</button>
+      <button class="cheatBtn" id="mergeBtn">Force Merge</button>
+    </div>
+    <div class="cheatInfo" id="cheatInfo">C = open/close. For testing only.</div>
+  </div>
+
+  <div class="hud" id="hud">
+    <div class="massLabel">Mass · Speed</div>
+    <div class="massValue" id="massValue">20</div>
+    <div style="font-size:12px;color:#777;margin-top:2px;" id="speedValue">0.0 m/s</div>
+  </div>
+
+  <div class="leaderboard" id="leaderboard">
+    <div class="leaderboardTitle">Players</div>
+    <div class="leaderboardEntries" id="leaderboardEntries"></div>
   </div>
 
   <div class="menu" id="menu">
     <div class="panel">
-      <h1>Agar.io</h1>
-      <p>Enter your nickname and join the server.</p>
-      <input id="nameInput" type="text" maxlength="16" placeholder="Nickname" value="Player" />
+      <h1>PIPO.IO</h1>
+      <p>Eat food to grow.<br>Space = split · W = eject mass · Green spikes split big cells · Minimap · World border</p>
+      <p style="margin-top:8px;font-size:12px;color:#999;">This version is optimized to run faster.</p>
+      <input id="nameInput" type="text" maxlength="16" value="Player" placeholder="Nickname" />
       <button id="playBtn">Play</button>
-      <div class="smallInfo">
-        Move mouse to move · Space to split · W to eject mass
-      </div>
     </div>
   </div>
 
-  <script src="/socket.io/socket.io.js"></script>
-  <script src="/game.js"></script>
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const hud = document.getElementById('hud');
+    const massValue = document.getElementById('massValue');
+    const speedValue = document.getElementById('speedValue');
+    const leaderboard = document.getElementById('leaderboard');
+    const leaderboardEntries = document.getElementById('leaderboardEntries');
+    const menu = document.getElementById('menu');
+    const playBtn = document.getElementById('playBtn');
+    const nameInput = document.getElementById('nameInput');
+    const cheatMenu = document.getElementById('cheatMenu');
+    const cheatInfo = document.getElementById('cheatInfo');
+    const massUpBtn = document.getElementById('massUpBtn');
+    const massDownBtn = document.getElementById('massDownBtn');
+    const spawnFoodBtn = document.getElementById('spawnFoodBtn');
+    const spawnVirusBtn = document.getElementById('spawnVirusBtn');
+        const godModeBtn = document.getElementById('godModeBtn');
+    const teleportBtn = document.getElementById('teleportBtn');
+    const refillBtn = document.getElementById('refillBtn');
+    const mergeBtn = document.getElementById('mergeBtn');
+
+    let W = canvas.width = window.innerWidth;
+    let H = canvas.height = window.innerHeight;
+
+    window.addEventListener('resize', () => {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    });
+
+    const worldSize = 100000;
+    const foods = [];
+    const pellets = [];
+    const viruses = [];
+        const targetFoodCount = 52000;
+    const foodCellSize = 900;
+    const foodGrid = new Map();
+    let mouseX = W / 2;
+    let mouseY = H / 2;
+    let cameraX = 0;
+    let cameraY = 0;
+    let zoom = 1;
+    let playing = false;
+    let splitCooldown = 0;
+    let ejectCooldown = 0;
+    let cheatOpen = false;
+    let safeMode = false;
+    let currentSpeedMs = 0;
+
+    const player = {
+      name: 'Player',
+      cells: [],
+      color: '#33c3ff'
+    };
+
+    function rand(a, b) {
+      return Math.random() * (b - a) + a;
+    }
+
+    function radiusFromMass(m) {
+      return Math.sqrt(m) * 6;
+    }
+
+    function foodKey(cx, cy) {
+      return `${cx},${cy}`;
+    }
+
+    function clearFoodGrid() {
+      foodGrid.clear();
+    }
+
+    function addFoodToGrid(food, index) {
+      const cx = Math.floor((food.x + worldSize / 2) / foodCellSize);
+      const cy = Math.floor((food.y + worldSize / 2) / foodCellSize);
+      const key = foodKey(cx, cy);
+      if (!foodGrid.has(key)) foodGrid.set(key, []);
+      foodGrid.get(key).push(index);
+    }
+
+    function rebuildFoodGrid() {
+      clearFoodGrid();
+      for (let i = 0; i < foods.length; i++) {
+        addFoodToGrid(foods[i], i);
+      }
+    }
+
+    function spawnFood() {
+      foods.length = 0;
+      for (let i = 0; i < targetFoodCount; i++) {
+        foods.push({
+          x: rand(-worldSize / 2, worldSize / 2),
+          y: rand(-worldSize / 2, worldSize / 2),
+          r: 12,
+          color: `hsl(${Math.floor(rand(0,360))},85%,60%)`
+        });
+      }
+      rebuildFoodGrid();
+    }
+
+    function spawnViruses() {
+      viruses.length = 0;
+      for (let i = 0; i < 90; i++) {
+        viruses.push({
+          x: rand(-worldSize / 2, worldSize / 2),
+          y: rand(-worldSize / 2, worldSize / 2),
+          r: 42,
+          color: '#33d65c'
+        });
+      }
+    }
+
+    
+    function resetGame() {
+      player.name = nameInput.value.trim() || 'Player';
+      player.cells = [{ x: 0, y: 0, mass: 20, vx: 0, vy: 0, mergeTimer: 0 }];
+      spawnFood();
+      spawnViruses();
+      pellets.length = 0;
+      splitCooldown = 0;
+      ejectCooldown = 0;
+      playing = true;
+      menu.style.display = 'none';
+      nameInput.blur();
+    }
+
+    playBtn.addEventListener('click', resetGame);
+    nameInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') resetGame();
+    });
+
+    window.addEventListener('mousemove', e => {
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+    });
+
+    window.addEventListener('keydown', e => {
+      if (e.key === 'c' || e.key === 'C') {
+        cheatOpen = !cheatOpen;
+        cheatMenu.style.display = cheatOpen ? 'block' : 'none';
+      }
+      if (!playing) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        splitPlayer();
+      }
+      if (e.key === 'w' || e.key === 'W') {
+        ejectMass();
+      }
+    });
+
+    function addMass(amount) {
+      if (!player.cells.length) return;
+      player.cells[0].mass = Math.max(10, player.cells[0].mass + amount);
+    }
+
+    function spawnExtraFood(amount) {
+      const start = foods.length;
+      for (let i = 0; i < amount; i++) {
+        foods.push({
+          x: rand(-worldSize / 2, worldSize / 2),
+          y: rand(-worldSize / 2, worldSize / 2),
+          r: 12,
+          color: `hsl(${Math.floor(rand(0,360))},85%,60%)`
+        });
+      }
+      for (let i = start; i < foods.length; i++) {
+        addFoodToGrid(foods[i], i);
+      }
+    }
+
+    function spawnVirusNearPlayer() {
+      const center = playerCenter();
+      viruses.push({
+        x: center.x + rand(-600, 600),
+        y: center.y + rand(-600, 600),
+        r: 42,
+        color: '#33d65c'
+      });
+    }
+
+    function forceMergeNow() {
+      if (!player.cells.length) return;
+      const center = playerCenter();
+      const total = totalPlayerMass();
+      player.cells = [{ x: center.x, y: center.y, mass: total, vx: 0, vy: 0, mergeTimer: 0 }];
+    }
+
+    function refillWorld() {
+      spawnExtraFood(8000);
+      while (viruses.length < 120) spawnVirusNearPlayer();
+    }
+
+    massUpBtn.onclick = () => { addMass(500); cheatInfo.textContent = 'Added mass.'; };
+    massDownBtn.onclick = () => { addMass(-200); cheatInfo.textContent = 'Reduced mass.'; };
+    spawnFoodBtn.onclick = () => { spawnExtraFood(8000); cheatInfo.textContent = 'Spawned more food.'; };
+    spawnVirusBtn.onclick = () => { spawnVirusNearPlayer(); cheatInfo.textContent = 'Spawned virus near player.'; };
+    godModeBtn.onclick = () => { safeMode = !safeMode; cheatInfo.textContent = safeMode ? 'Safe mode enabled.' : 'Safe mode disabled.'; };
+    teleportBtn.onclick = () => { const c = playerCenter(); const dx = -c.x; const dy = -c.y; for (const cell of player.cells) { cell.x += dx; cell.y += dy; } cheatInfo.textContent = 'Teleported to center.'; };
+    refillBtn.onclick = () => { refillWorld(); cheatInfo.textContent = 'World refilled.'; };
+    mergeBtn.onclick = () => { forceMergeNow(); cheatInfo.textContent = 'Forced merge.'; };
+
+    function playerCenter() {
+      let total = 0, sx = 0, sy = 0;
+      for (const cell of player.cells) {
+        total += cell.mass;
+        sx += cell.x * cell.mass;
+        sy += cell.y * cell.mass;
+      }
+      return total ? { x: sx / total, y: sy / total } : { x: 0, y: 0 };
+    }
+
+    function totalPlayerMass() {
+      return player.cells.reduce((sum, c) => sum + c.mass, 0);
+    }
+
+    function movePlayer() {
+      const center = playerCenter();
+      const dx = mouseX - W / 2;
+      const dy = mouseY - H / 2;
+      const len = Math.hypot(dx, dy) || 1;
+      const distanceFactor = Math.min(len / 250, 1);
+      for (const cell of player.cells) {
+        const speed = 0.95 / Math.pow(cell.mass, 0.16);
+        cell.vx += (dx / len) * speed * distanceFactor * 0.9;
+        cell.vy += (dy / len) * speed * distanceFactor * 0.9;
+        cell.vx *= 0.92;
+        cell.vy *= 0.92;
+        cell.x += cell.vx;
+        cell.y += cell.vy;
+        cell.mergeTimer = Math.max(0, cell.mergeTimer - 1);
+      }
+
+      for (let i = 0; i < player.cells.length; i++) {
+        for (let j = i + 1; j < player.cells.length; j++) {
+          const a = player.cells[i];
+          const b = player.cells[j];
+          const dx2 = b.x - a.x;
+          const dy2 = b.y - a.y;
+          const d = Math.hypot(dx2, dy2) || 1;
+          const minD = (radiusFromMass(a.mass) + radiusFromMass(b.mass)) * 0.55;
+          if (d < minD) {
+            const push = (minD - d) * 0.08;
+            a.x -= (dx2 / d) * push;
+            a.y -= (dy2 / d) * push;
+            b.x += (dx2 / d) * push;
+            b.y += (dy2 / d) * push;
+          }
+        }
+      }
+    }
+
+    function splitPlayer() {
+      if (splitCooldown > 0) return;
+      if (player.cells.length >= 16) return;
+      const dx = mouseX - W / 2;
+      const dy = mouseY - H / 2;
+      const len = Math.hypot(dx, dy) || 1;
+      const dirX = dx / len;
+      const dirY = dy / len;
+      const newCells = [];
+      for (const cell of player.cells) {
+        if (cell.mass < 36 || player.cells.length + newCells.length >= 16) continue;
+        const newMass = cell.mass / 2;
+        cell.mass = newMass;
+        const r = radiusFromMass(newMass);
+        newCells.push({
+          x: cell.x + dirX * (r * 2.2),
+          y: cell.y + dirY * (r * 2.2),
+          mass: newMass,
+          vx: dirX * 18,
+          vy: dirY * 18,
+          mergeTimer: 300
+        });
+        cell.mergeTimer = 300;
+      }
+      player.cells.push(...newCells);
+      splitCooldown = 20;
+    }
+
+    function ejectMass() {
+      if (ejectCooldown > 0) return;
+      const dx = mouseX - W / 2;
+      const dy = mouseY - H / 2;
+      const len = Math.hypot(dx, dy) || 1;
+      const dirX = dx / len;
+      const dirY = dy / len;
+      for (const cell of player.cells) {
+        if (cell.mass <= 22) continue;
+        cell.mass -= 1;
+        const r = radiusFromMass(cell.mass);
+        pellets.push({
+          x: cell.x + dirX * (r + 26),
+          y: cell.y + dirY * (r + 26),
+          vx: dirX * 18,
+          vy: dirY * 18,
+          mass: 1,
+          color: '#33c3ff',
+          life: 180
+        });
+      }
+      ejectCooldown = 6;
+    }
+
+    
+    function removeFoodAt(index) {
+      const lastIndex = foods.length - 1;
+      if (index < 0 || index > lastIndex) return;
+      foods[index] = foods[lastIndex];
+      foods.pop();
+    }
+
+    function eatFood(entity) {
+      const r = radiusFromMass(entity.mass);
+      const range = r + 22;
+      const minCX = Math.floor((entity.x - range + worldSize / 2) / foodCellSize);
+      const maxCX = Math.floor((entity.x + range + worldSize / 2) / foodCellSize);
+      const minCY = Math.floor((entity.y - range + worldSize / 2) / foodCellSize);
+      const maxCY = Math.floor((entity.y + range + worldSize / 2) / foodCellSize);
+
+      let ateFood = false;
+      for (let cx = minCX; cx <= maxCX; cx++) {
+        for (let cy = minCY; cy <= maxCY; cy++) {
+          const cellFoods = foodGrid.get(foodKey(cx, cy));
+          if (!cellFoods) continue;
+          for (let i = cellFoods.length - 1; i >= 0; i--) {
+            const index = cellFoods[i];
+            const f = foods[index];
+            if (!f) continue;
+            const dx = entity.x - f.x;
+            const dy = entity.y - f.y;
+            if (dx * dx + dy * dy < range * range) {
+              entity.mass += 0.35;
+              removeFoodAt(index);
+              ateFood = true;
+            }
+          }
+        }
+      }
+      if (ateFood) rebuildFoodGrid();
+
+      for (let i = pellets.length - 1; i >= 0; i--) {
+        const p = pellets[i];
+        if (Math.abs(entity.x - p.x) > 160 || Math.abs(entity.y - p.y) > 160) continue;
+        const d = Math.hypot(entity.x - p.x, entity.y - p.y);
+        if (d < r + 6) {
+          entity.mass += p.mass;
+          pellets[i] = pellets[pellets.length - 1];
+          pellets.pop();
+        }
+      }
+    }
+
+    function respawnFood() {
+      const missing = targetFoodCount - foods.length;
+      if (missing > 0) spawnExtraFood(missing);
+      while (viruses.length < 90) {
+        viruses.push({
+          x: rand(-worldSize / 2, worldSize / 2),
+          y: rand(-worldSize / 2, worldSize / 2),
+          r: 42,
+          color: '#33d65c'
+        });
+      }
+    }
+
+    function splitByVirus(cellIndex, virusIndex) {
+      const cell = player.cells[cellIndex];
+      if (!cell) return;
+      const piecesWanted = Math.min(16 - player.cells.length + 1, Math.max(2, Math.min(8, Math.floor(cell.mass / 18))));
+      if (piecesWanted < 2) return;
+
+      const originalMass = cell.mass;
+      const pieceMass = originalMass / piecesWanted;
+      cell.mass = pieceMass;
+      cell.mergeTimer = 420;
+
+      for (let i = 1; i < piecesWanted; i++) {
+        const ang = (Math.PI * 2 * i) / piecesWanted + rand(-0.15, 0.15);
+        player.cells.push({
+          x: cell.x + Math.cos(ang) * 20,
+          y: cell.y + Math.sin(ang) * 20,
+          mass: pieceMass,
+          vx: Math.cos(ang) * 16,
+          vy: Math.sin(ang) * 16,
+          mergeTimer: 420
+        });
+      }
+
+      viruses.splice(virusIndex, 1);
+      viruses.push({
+        x: rand(-worldSize / 2, worldSize / 2),
+        y: rand(-worldSize / 2, worldSize / 2),
+        r: 42,
+        color: '#33d65c'
+      });
+    }
+
+    function resolveCombat() {
+      for (let v = viruses.length - 1; v >= 0; v--) {
+        const virus = viruses[v];
+        for (let c = player.cells.length - 1; c >= 0; c--) {
+          const cell = player.cells[c];
+          const d = Math.hypot(cell.x - virus.x, cell.y - virus.y);
+          const pr = radiusFromMass(cell.mass);
+          if (cell.mass >= 36 && d < pr - virus.r * 0.15) {
+            splitByVirus(c, v);
+            break;
+          }
+        }
+      }
+
+      if (player.cells.length > 1) {
+        for (let i = 0; i < player.cells.length; i++) {
+          for (let j = i + 1; j < player.cells.length; j++) {
+            const a = player.cells[i];
+            const b = player.cells[j];
+            const d = Math.hypot(a.x - b.x, a.y - b.y);
+            if (a.mergeTimer <= 0 && b.mergeTimer <= 0 && d < Math.max(radiusFromMass(a.mass), radiusFromMass(b.mass)) * 0.6) {
+              a.mass += b.mass;
+              player.cells.splice(j, 1);
+              j--;
+            }
+          }
+        }
+      }
+    }
+
+    function updateCamera() {
+      const center = playerCenter();
+      const totalMass = totalPlayerMass();
+      const biggestCellMass = player.cells.length ? Math.max(...player.cells.map(c => c.mass)) : totalMass;
+      const biggestRadius = radiusFromMass(biggestCellMass);
+
+      cameraX += (center.x - cameraX) * 0.08;
+      cameraY += (center.y - cameraY) * 0.08;
+
+      const fitZoomX = (W * 0.22) / Math.max(biggestRadius, 1);
+      const fitZoomY = (H * 0.22) / Math.max(biggestRadius, 1);
+      const fitZoom = Math.min(fitZoomX, fitZoomY);
+      const massZoom = 1.1 / Math.pow(Math.max(totalMass, 20), 0.16);
+      const targetZoom = Math.min(fitZoom, massZoom);
+
+      zoom += (targetZoom - zoom) * 0.12;
+      zoom = Math.max(0.018, Math.min(1.15, zoom));
+    }
+
+    function worldToScreen(x, y) {
+      return {
+        x: (x - cameraX) * zoom + W / 2,
+        y: (y - cameraY) * zoom + H / 2
+      };
+    }
+
+    function drawCircle(x, y, r, color, name, mass) {
+      const s = worldToScreen(x, y);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, r * zoom, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      if (r * zoom > 18) {
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.font = `${Math.max(12, r * zoom * 0.28)}px Arial`;
+        ctx.fillText(name, s.x, s.y - 2);
+        ctx.font = `${Math.max(10, r * zoom * 0.2)}px Arial`;
+        ctx.fillText(Math.floor(mass), s.x, s.y + 16);
+      }
+    }
+
+    function drawBackgroundGrid() {
+      const grid = 50 * zoom;
+      const offsetX = ((-cameraX * zoom) % grid + grid) % grid;
+      const offsetY = ((-cameraY * zoom) % grid + grid) % grid;
+
+      ctx.strokeStyle = '#eeeeee';
+      ctx.lineWidth = 1;
+
+      for (let x = offsetX; x <= W; x += grid) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, H);
+        ctx.stroke();
+      }
+
+      for (let y = offsetY; y <= H; y += grid) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(W, y);
+        ctx.stroke();
+      }
+
+      const left = (-worldSize / 2 - cameraX) * zoom + W / 2;
+      const top = (-worldSize / 2 - cameraY) * zoom + H / 2;
+      const size = worldSize * zoom;
+      ctx.strokeStyle = '#cfcfcf';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(left, top, size, size);
+    }
+
+    function updateLeaderboard() {
+      const all = [{ name: player.name, mass: totalPlayerMass() }];
+      leaderboardEntries.innerHTML = all.map((e, i) => {
+        return `<div style="color:#2f7edb;font-weight:700;">${i + 1}. ${e.name}</div>`;
+      }).join('');
+    }
+
+    function clampPlayerToWorld() {
+      for (const cell of player.cells) {
+        const r = radiusFromMass(cell.mass);
+        const bound = worldSize / 2 - r;
+        cell.x = Math.max(-bound, Math.min(bound, cell.x));
+        cell.y = Math.max(-bound, Math.min(bound, cell.y));
+      }
+    }
+
+    function update() {
+      if (!playing) return;
+      if (splitCooldown > 0) splitCooldown--;
+      if (ejectCooldown > 0) ejectCooldown--;
+
+      movePlayer();
+      clampPlayerToWorld();
+
+      for (const pellet of pellets) {
+        pellet.x += pellet.vx;
+        pellet.y += pellet.vy;
+        pellet.vx *= 0.92;
+        pellet.vy *= 0.92;
+        pellet.life--;
+      }
+      for (let i = pellets.length - 1; i >= 0; i--) {
+        if (pellets[i].life <= 0) pellets.splice(i, 1);
+      }
+
+      let speedAccumulator = 0;
+      for (const cell of player.cells) {
+        eatFood(cell);
+        speedAccumulator += Math.hypot(cell.vx, cell.vy);
+      }
+      respawnFood();
+      resolveCombat();
+      updateCamera();
+      currentSpeedMs = player.cells.length ? speedAccumulator / player.cells.length : 0;
+      massValue.textContent = Math.floor(totalPlayerMass());
+      speedValue.textContent = currentSpeedMs.toFixed(1) + ' m/s';
+      updateLeaderboard();
+    }
+
+    function drawVirus(x, y, r) {
+      const s = worldToScreen(x, y);
+      const rr = r * zoom;
+      const spikes = 18;
+      ctx.beginPath();
+      for (let i = 0; i <= spikes; i++) {
+        const a = (i / spikes) * Math.PI * 2;
+        const rad = rr * (i % 2 === 0 ? 1.14 : 0.88);
+        const px = s.x + Math.cos(a) * rad;
+        const py = s.y + Math.sin(a) * rad;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = '#33d65c';
+      ctx.fill();
+      ctx.strokeStyle = '#239842';
+      ctx.lineWidth = Math.max(1, 2 * zoom);
+      ctx.stroke();
+    }
+
+    function drawMinimap() {
+      const mapW = 170;
+      const mapH = 170;
+      const x = W - mapW - 16;
+      const y = H - mapH - 16;
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.fillRect(x, y, mapW, mapH);
+      ctx.strokeStyle = '#d0d0d0';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, y, mapW, mapH);
+
+      ctx.strokeStyle = '#bbbbbb';
+      ctx.strokeRect(x + 1, y + 1, mapW - 2, mapH - 2);
+
+      for (const virus of viruses) {
+        const mx = x + ((virus.x + worldSize / 2) / worldSize) * mapW;
+        const my = y + ((virus.y + worldSize / 2) / worldSize) * mapH;
+        ctx.fillStyle = '#33d65c';
+        ctx.fillRect(mx - 1, my - 1, 3, 3);
+      }
+
+
+      const center = playerCenter();
+      const px = x + ((center.x + worldSize / 2) / worldSize) * mapW;
+      const py = y + ((center.y + worldSize / 2) / worldSize) * mapH;
+      ctx.fillStyle = '#33c3ff';
+      ctx.beginPath();
+      ctx.arc(px, py, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+      drawBackgroundGrid();
+
+      const viewPad = 30;
+      const left = cameraX - W / (2 * zoom) - viewPad;
+      const right = cameraX + W / (2 * zoom) + viewPad;
+      const top = cameraY - H / (2 * zoom) - viewPad;
+      const bottom = cameraY + H / (2 * zoom) + viewPad;
+
+      for (const f of foods) {
+        if (f.x < left || f.x > right || f.y < top || f.y > bottom) continue;
+        const s = worldToScreen(f.x, f.y);
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, f.r * zoom, 0, Math.PI * 2);
+        ctx.fillStyle = f.color;
+        ctx.fill();
+      }
+
+      for (const p of pellets) {
+        if (p.x < left || p.x > right || p.y < top || p.y > bottom) continue;
+        const s = worldToScreen(p.x, p.y);
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, 7 * zoom, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
+        ctx.fill();
+      }
+
+      for (const virus of viruses) {
+        const rr = virus.r * 1.3;
+        if (virus.x < left - rr || virus.x > right + rr || virus.y < top - rr || virus.y > bottom + rr) continue;
+        drawVirus(virus.x, virus.y, virus.r);
+      }
+
+
+      for (const cell of player.cells) {
+        drawCircle(cell.x, cell.y, radiusFromMass(cell.mass), player.color, player.name, cell.mass);
+      }
+
+      drawMinimap();
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    updateLeaderboard();
+    loop();
+  </script>
 </body>
 </html>
