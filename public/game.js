@@ -31,24 +31,17 @@ const state = {
   ejectQueued: false,
   cameraX: 0,
   cameraY: 0,
-  zoom: 1,
+  zoom: 1
 };
-
-const snapshots = [];
-const INTERPOLATION_DELAY = 100;
 
 function radiusFromMass(mass) {
   return Math.sqrt(mass) * 4.8;
 }
 
-function lerp(a, b, t) {
-  return a + (b - a) * t;
-}
-
 function worldToScreen(x, y) {
   return {
     x: (x - state.cameraX) * state.zoom + W / 2,
-    y: (y - state.cameraY) * state.zoom + H / 2,
+    y: (y - state.cameraY) * state.zoom + H / 2
   };
 }
 
@@ -152,6 +145,7 @@ function drawViruses() {
   for (const virus of state.viruses) {
     const s = worldToScreen(virus.x, virus.y);
     const rr = virus.r * state.zoom;
+
     if (s.x < -rr * 1.5 || s.x > W + rr * 1.5 || s.y < -rr * 1.5 || s.y > H + rr * 1.5) {
       continue;
     }
@@ -273,82 +267,6 @@ function render() {
   updateHud();
 }
 
-function cloneStateForSnapshot(serverState) {
-  return {
-    worldSize: serverState.worldSize,
-    food: serverState.food.map((f) => ({ ...f })),
-    viruses: serverState.viruses.map((v) => ({ ...v })),
-    leaderboard: serverState.leaderboard.map((e) => ({ ...e })),
-    players: serverState.players.map((p) => ({
-      id: p.id,
-      name: p.name,
-      color: p.color,
-      totalMass: p.totalMass,
-      cells: p.cells.map((c) => ({ ...c })),
-    })),
-  };
-}
-
-function interpolatePlayers(older, newer, alpha) {
-  const oldMap = new Map(older.players.map((p) => [p.id, p]));
-  const newMap = new Map(newer.players.map((p) => [p.id, p]));
-  const out = [];
-
-  for (const [id, newPlayer] of newMap) {
-    const oldPlayer = oldMap.get(id) || newPlayer;
-
-    out.push({
-      ...newPlayer,
-      cells: newPlayer.cells.map((newCell, i) => {
-        const oldCell = oldPlayer.cells[i] || newCell;
-        return {
-          ...newCell,
-          x: lerp(oldCell.x, newCell.x, alpha),
-          y: lerp(oldCell.y, newCell.y, alpha),
-        };
-      }),
-    });
-  }
-
-  return out;
-}
-
-function getInterpolatedState() {
-  if (snapshots.length === 0) return null;
-  if (snapshots.length === 1) return snapshots[0].state;
-
-  const renderTime = Date.now() - INTERPOLATION_DELAY;
-
-  let older = snapshots[0];
-  let newer = snapshots[snapshots.length - 1];
-
-  for (let i = 0; i < snapshots.length - 1; i++) {
-    if (
-      snapshots[i].time <= renderTime &&
-      snapshots[i + 1].time >= renderTime
-    ) {
-      older = snapshots[i];
-      newer = snapshots[i + 1];
-      break;
-    }
-  }
-
-  if (renderTime >= snapshots[snapshots.length - 1].time) {
-    return snapshots[snapshots.length - 1].state;
-  }
-
-  const span = newer.time - older.time || 1;
-  const alpha = Math.max(0, Math.min(1, (renderTime - older.time) / span));
-
-  return {
-    worldSize: newer.state.worldSize,
-    food: newer.state.food,
-    viruses: newer.state.viruses,
-    leaderboard: newer.state.leaderboard,
-    players: interpolatePlayers(older.state, newer.state, alpha),
-  };
-}
-
 window.addEventListener("mousemove", (e) => {
   state.mouseX = e.clientX - W / 2;
   state.mouseY = e.clientY - H / 2;
@@ -388,14 +306,11 @@ socket.on("disconnect", () => {
 
 socket.on("state", (serverState) => {
   console.log("debugPlayerCount:", serverState.debugPlayerCount);
-  snapshots.push({
-    time: Date.now(),
-    state: cloneStateForSnapshot(serverState),
-  });
-
-  while (snapshots.length > 10) {
-    snapshots.shift();
-  }
+  state.worldSize = serverState.worldSize;
+  state.food = serverState.food;
+  state.viruses = serverState.viruses;
+  state.players = serverState.players;
+  state.leaderboard = serverState.leaderboard;
 });
 
 setInterval(() => {
@@ -405,7 +320,7 @@ setInterval(() => {
     mouseX: state.mouseX,
     mouseY: state.mouseY,
     split: state.splitQueued,
-    eject: state.ejectQueued,
+    eject: state.ejectQueued
   });
 
   state.splitQueued = false;
@@ -413,20 +328,9 @@ setInterval(() => {
 }, 1000 / 30);
 
 function loop() {
-  const interpolated = getInterpolatedState();
-
-  if (interpolated) {
-    state.worldSize = interpolated.worldSize;
-    state.food = interpolated.food;
-    state.viruses = interpolated.viruses;
-    state.players = interpolated.players;
-    state.leaderboard = interpolated.leaderboard;
-  }
-
   updateCamera();
   render();
   requestAnimationFrame(loop);
 }
 
 loop();
-
