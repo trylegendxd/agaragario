@@ -361,6 +361,18 @@ function buildSnapshot() {
   };
 }
 
+app.get("/debug/players", (req, res) => {
+  res.json({
+    playerCount: players.size,
+    players: [...players.values()].map((p) => ({
+      id: p.id,
+      name: p.name,
+      totalMass: Math.round(totalMass(p)),
+      cells: p.cells.length
+    }))
+  });
+});
+
 io.on("connection", (socket) => {
   console.log("socket connected:", socket.id);
 
