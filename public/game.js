@@ -387,6 +387,7 @@ socket.on("disconnect", () => {
 });
 
 socket.on("state", (serverState) => {
+  console.log("debugPlayerCount:", serverState.debugPlayerCount);
   snapshots.push({
     time: Date.now(),
     state: cloneStateForSnapshot(serverState),
@@ -428,3 +429,4 @@ function loop() {
 }
 
 loop();
+
