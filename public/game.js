@@ -9,8 +9,8 @@ const nameInput = document.getElementById("nameInput");
 const massValue = document.getElementById("massValue");
 const leaderboardEntries = document.getElementById("leaderboardEntries");
 
-let W = canvas.width = window.innerWidth;
-let H = canvas.height = window.innerHeight;
+let W = (canvas.width = window.innerWidth);
+let H = (canvas.height = window.innerHeight);
 
 window.addEventListener("resize", () => {
   W = canvas.width = window.innerWidth;
@@ -31,17 +31,24 @@ const state = {
   ejectQueued: false,
   cameraX: 0,
   cameraY: 0,
-  zoom: 1
+  zoom: 1,
 };
+
+const snapshots = [];
+const INTERPOLATION_DELAY = 100;
 
 function radiusFromMass(mass) {
   return Math.sqrt(mass) * 4.8;
 }
 
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
 function worldToScreen(x, y) {
   return {
     x: (x - state.cameraX) * state.zoom + W / 2,
-    y: (y - state.cameraY) * state.zoom + H / 2
+    y: (y - state.cameraY) * state.zoom + H / 2,
   };
 }
 
@@ -96,6 +103,8 @@ function updateCamera() {
 
 function drawGrid() {
   const grid = 50 * state.zoom;
+  if (grid < 8) return;
+
   const offsetX = ((-state.cameraX * state.zoom) % grid + grid) % grid;
   const offsetY = ((-state.cameraY * state.zoom) % grid + grid) % grid;
 
@@ -126,34 +135,27 @@ function drawGrid() {
 }
 
 function drawFood() {
-  const viewPad = 20;
-  const left = state.cameraX - W / (2 * state.zoom) - viewPad;
-  const right = state.cameraX + W / (2 * state.zoom) + viewPad;
-  const top = state.cameraY - H / (2 * state.zoom) - viewPad;
-  const bottom = state.cameraY + H / (2 * state.zoom) + viewPad;
-
   for (const f of state.food) {
-    if (f.x < left || f.x > right || f.y < top || f.y > bottom) continue;
     const s = worldToScreen(f.x, f.y);
+    const rr = f.r * state.zoom;
+
+    if (s.x < -rr || s.x > W + rr || s.y < -rr || s.y > H + rr) continue;
+
     ctx.beginPath();
-    ctx.arc(s.x, s.y, f.r * state.zoom, 0, Math.PI * 2);
+    ctx.arc(s.x, s.y, rr, 0, Math.PI * 2);
     ctx.fillStyle = f.color;
     ctx.fill();
   }
 }
 
 function drawViruses() {
-  const viewPad = 80;
-  const left = state.cameraX - W / (2 * state.zoom) - viewPad;
-  const right = state.cameraX + W / (2 * state.zoom) + viewPad;
-  const top = state.cameraY - H / (2 * state.zoom) - viewPad;
-  const bottom = state.cameraY + H / (2 * state.zoom) + viewPad;
-
   for (const virus of state.viruses) {
-    if (virus.x < left || virus.x > right || virus.y < top || virus.y > bottom) continue;
-
     const s = worldToScreen(virus.x, virus.y);
     const rr = virus.r * state.zoom;
+    if (s.x < -rr * 1.5 || s.x > W + rr * 1.5 || s.y < -rr * 1.5 || s.y > H + rr * 1.5) {
+      continue;
+    }
+
     const spikes = 18;
 
     ctx.beginPath();
@@ -186,6 +188,8 @@ function drawPlayers() {
       const s = worldToScreen(cell.x, cell.y);
       const r = radiusFromMass(cell.mass) * state.zoom;
 
+      if (s.x < -r * 2 || s.x > W + r * 2 || s.y < -r * 2 || s.y > H + r * 2) continue;
+
       ctx.beginPath();
       ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
       ctx.fillStyle = player.color;
@@ -195,8 +199,9 @@ function drawPlayers() {
       ctx.stroke();
 
       if (r > 18) {
-        ctx.fillStyle = "#fff";
+        ctx.fillStyle = "#ffffff";
         ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
         ctx.font = `${Math.max(12, r * 0.28)}px Arial`;
         ctx.fillText(player.name, s.x, s.y - 2);
         ctx.font = `${Math.max(10, r * 0.2)}px Arial`;
@@ -226,13 +231,18 @@ function drawMinimap() {
   }
 
   for (const p of state.players) {
-    const total = p.cells.reduce((sum, c) => sum + c.mass, 0);
+    if (!p.cells.length) continue;
+
+    let total = 0;
     let sx = 0;
     let sy = 0;
+
     for (const c of p.cells) {
+      total += c.mass;
       sx += c.x * c.mass;
       sy += c.y * c.mass;
     }
+
     const centerX = sx / total;
     const centerY = sy / total;
 
@@ -263,6 +273,82 @@ function render() {
   updateHud();
 }
 
+function cloneStateForSnapshot(serverState) {
+  return {
+    worldSize: serverState.worldSize,
+    food: serverState.food.map((f) => ({ ...f })),
+    viruses: serverState.viruses.map((v) => ({ ...v })),
+    leaderboard: serverState.leaderboard.map((e) => ({ ...e })),
+    players: serverState.players.map((p) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color,
+      totalMass: p.totalMass,
+      cells: p.cells.map((c) => ({ ...c })),
+    })),
+  };
+}
+
+function interpolatePlayers(older, newer, alpha) {
+  const oldMap = new Map(older.players.map((p) => [p.id, p]));
+  const newMap = new Map(newer.players.map((p) => [p.id, p]));
+  const out = [];
+
+  for (const [id, newPlayer] of newMap) {
+    const oldPlayer = oldMap.get(id) || newPlayer;
+
+    out.push({
+      ...newPlayer,
+      cells: newPlayer.cells.map((newCell, i) => {
+        const oldCell = oldPlayer.cells[i] || newCell;
+        return {
+          ...newCell,
+          x: lerp(oldCell.x, newCell.x, alpha),
+          y: lerp(oldCell.y, newCell.y, alpha),
+        };
+      }),
+    });
+  }
+
+  return out;
+}
+
+function getInterpolatedState() {
+  if (snapshots.length === 0) return null;
+  if (snapshots.length === 1) return snapshots[0].state;
+
+  const renderTime = Date.now() - INTERPOLATION_DELAY;
+
+  let older = snapshots[0];
+  let newer = snapshots[snapshots.length - 1];
+
+  for (let i = 0; i < snapshots.length - 1; i++) {
+    if (
+      snapshots[i].time <= renderTime &&
+      snapshots[i + 1].time >= renderTime
+    ) {
+      older = snapshots[i];
+      newer = snapshots[i + 1];
+      break;
+    }
+  }
+
+  if (renderTime >= snapshots[snapshots.length - 1].time) {
+    return snapshots[snapshots.length - 1].state;
+  }
+
+  const span = newer.time - older.time || 1;
+  const alpha = Math.max(0, Math.min(1, (renderTime - older.time) / span));
+
+  return {
+    worldSize: newer.state.worldSize,
+    food: newer.state.food,
+    viruses: newer.state.viruses,
+    leaderboard: newer.state.leaderboard,
+    players: interpolatePlayers(older.state, newer.state, alpha),
+  };
+}
+
 window.addEventListener("mousemove", (e) => {
   state.mouseX = e.clientX - W / 2;
   state.mouseY = e.clientY - H / 2;
@@ -278,15 +364,16 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-playBtn.addEventListener("click", () => {
+function joinGame() {
   socket.emit("join", nameInput.value.trim() || "Player");
   menu.style.display = "none";
-});
+}
+
+playBtn.addEventListener("click", joinGame);
 
 nameInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
-    socket.emit("join", nameInput.value.trim() || "Player");
-    menu.style.display = "none";
+    joinGame();
   }
 });
 
@@ -295,12 +382,19 @@ socket.on("connect", () => {
   state.myId = socket.id;
 });
 
+socket.on("disconnect", () => {
+  state.connected = false;
+});
+
 socket.on("state", (serverState) => {
-  state.worldSize = serverState.worldSize;
-  state.food = serverState.food;
-  state.viruses = serverState.viruses;
-  state.players = serverState.players;
-  state.leaderboard = serverState.leaderboard;
+  snapshots.push({
+    time: Date.now(),
+    state: cloneStateForSnapshot(serverState),
+  });
+
+  while (snapshots.length > 10) {
+    snapshots.shift();
+  }
 });
 
 setInterval(() => {
@@ -310,7 +404,7 @@ setInterval(() => {
     mouseX: state.mouseX,
     mouseY: state.mouseY,
     split: state.splitQueued,
-    eject: state.ejectQueued
+    eject: state.ejectQueued,
   });
 
   state.splitQueued = false;
@@ -318,6 +412,16 @@ setInterval(() => {
 }, 1000 / 30);
 
 function loop() {
+  const interpolated = getInterpolatedState();
+
+  if (interpolated) {
+    state.worldSize = interpolated.worldSize;
+    state.food = interpolated.food;
+    state.viruses = interpolated.viruses;
+    state.players = interpolated.players;
+    state.leaderboard = interpolated.leaderboard;
+  }
+
   updateCamera();
   render();
   requestAnimationFrame(loop);
