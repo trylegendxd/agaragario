@@ -4,7 +4,7 @@ const http = require("http");
 const { Server } = require("socket.io");
 const session = require("express-session");
 const Database = require("better-sqlite3");
-const argon2 = require("argon2");
+const bcrypt = require("bcryptjs");
 
 const app = express();
 const server = http.createServer(app);
@@ -18,7 +18,7 @@ db.exec(`
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
+  )
 `);
 
 const sessionMiddleware = session({
@@ -43,8 +43,6 @@ const FOOD_COUNT = 1000;
 const VIRUS_COUNT = 35;
 const TICK_RATE = 35;
 const MAX_CELLS = 16;
-
-// How far beyond the visible area to still send entities
 const SNAPSHOT_PADDING = 800;
 
 const players = new Map();
@@ -492,7 +490,7 @@ app.post("/api/register", async (req, res) => {
       return res.status(409).json({ error: "Username already exists." });
     }
 
-    const passwordHash = await argon2.hash(password);
+    const passwordHash = await bcrypt.hash(password, 12);
 
     const result = db
       .prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)")
@@ -526,7 +524,7 @@ app.post("/api/login", async (req, res) => {
       return res.status(401).json({ error: "Invalid username or password." });
     }
 
-    const ok = await argon2.verify(user.password_hash, password);
+    const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) {
       return res.status(401).json({ error: "Invalid username or password." });
     }
@@ -641,4 +639,4 @@ setInterval(() => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
-});
+});زة
