@@ -55,7 +55,13 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(sessionMiddleware);
-app.use(express.static(__dirname));
+
+const PUBLIC_DIR = path.join(__dirname, "public");
+const STATIC_DIR = fs.existsSync(PUBLIC_DIR) ? PUBLIC_DIR : __dirname;
+app.use(express.static(STATIC_DIR));
+app.get("/", (req, res) => {
+  res.sendFile(path.join(STATIC_DIR, "index.html"));
+});
 
 const WORLD_SIZE = 12000;
 const FOOD_COUNT = 3000;
