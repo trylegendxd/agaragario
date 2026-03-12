@@ -416,14 +416,13 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
-  if (chatOpen) {
-    return;
-  }
+  if (chatOpen) return;
 
   if (e.code === "Space") {
     e.preventDefault();
     state.splitQueued = true;
   }
+
   if (e.key === "w" || e.key === "W") {
     state.ejectQueued = true;
   }
@@ -432,6 +431,7 @@ window.addEventListener("keydown", (e) => {
 function joinGame() {
   socket.emit("join", nameInput.value.trim() || "Player");
   menu.style.display = "none";
+  setChatOpen(false);
 }
 
 playBtn.addEventListener("click", joinGame);
@@ -442,6 +442,25 @@ nameInput.addEventListener("keydown", (e) => {
   }
 });
 
+if (chatInput) {
+  chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const text = chatInput.value.trim();
+      if (text) {
+        socket.emit("chat", text);
+        chatInput.value = "";
+      }
+    }
+
+    if (e.key === "Escape" || e.key === "g" || e.key === "G") {
+      e.preventDefault();
+      setChatOpen(false);
+    }
+
+    e.stopPropagation();
+  });
+}
+
 socket.on("connect", () => {
   state.connected = true;
   state.myId = socket.id;
@@ -449,6 +468,18 @@ socket.on("connect", () => {
 
 socket.on("disconnect", () => {
   state.connected = false;
+});
+
+socket.on("chatHistory", (history) => {
+  chatMessages.length = 0;
+  for (const msg of history) {
+    chatMessages.push(msg);
+  }
+  renderChat();
+});
+
+socket.on("chat", (msg) => {
+  pushChatMessage(msg);
 });
 
 socket.on("state", (serverState) => {
@@ -494,5 +525,4 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
-loop(); just update this one please keep things simpel and straightforward so its easy for me to keep track of what im doing please do not make any huge changes if not necessary please direct me in what to replace and where 
-
+loop();
