@@ -19,6 +19,7 @@ const chatBox = document.getElementById("chatBox");
 const chatMessagesEl = document.getElementById("chatMessages");
 const chatInput = document.getElementById("chatInput");
 
+const authPanel = document.getElementById("authPanel");
 const authUsername = document.getElementById("authUsername");
 const authPassword = document.getElementById("authPassword");
 const registerBtn = document.getElementById("registerBtn");
@@ -103,8 +104,17 @@ function updateAuthUi(user) {
     setAuthStatus(`Logged in as ${user.username}`);
     if (authUsername) authUsername.value = user.username;
     if (authPassword) authPassword.value = "";
+
+    if (authPanel) authPanel.style.display = "none";
+    if (landingScreen) landingScreen.style.display = "none";
+    menu.style.display = "flex";
   } else {
     setAuthStatus("Not logged in.", false);
+
+    if (authPassword) authPassword.value = "";
+    if (authPanel) authPanel.style.display = "none";
+    if (landingScreen) landingScreen.style.display = "flex";
+    menu.style.display = "none";
   }
 }
 
@@ -522,13 +532,7 @@ nameInput.addEventListener("keydown", (e) => {
 
 if (startMenuBtn) {
   startMenuBtn.addEventListener("click", () => {
-    if (!currentUser) {
-      setAuthStatus("Please login or register first.", true);
-      return;
-    }
-
-    if (landingScreen) landingScreen.style.display = "none";
-    menu.style.display = "flex";
+    if (authPanel) authPanel.style.display = "block";
   });
 }
 
@@ -585,8 +589,6 @@ if (logoutBtn) {
   logoutBtn.addEventListener("click", async () => {
     await api("/api/logout", {});
     updateAuthUi(null);
-    if (landingScreen) landingScreen.style.display = "flex";
-    menu.style.display = "none";
   });
 }
 
