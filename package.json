@@ -1,20 +1,17 @@
 {
-  "name": "agario-online",
+  "name": "pipo-io",
   "version": "1.0.0",
-  "description": "Simple online Agar.io-style multiplayer prototype",
+  "description": "PIPO.IO multiplayer game with auth",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js",
-    "prod": "node server.js",
-    "loadtest": "artillery run loadtest.yml"
+    "dev": "node server.js"
   },
   "dependencies": {
+    "argon2": "latest",
+    "better-sqlite3": "latest",
     "express": "^4.21.2",
+    "express-session": "^1.19.0",
     "socket.io": "^4.8.1"
-  },
-  "devDependencies": {
-    "artillery": "^2.0.22",
-    "artillery-engine-socketio-v3": "^1.0.7"
   }
 }
