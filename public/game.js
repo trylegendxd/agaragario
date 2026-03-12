@@ -1,7 +1,7 @@
 const socket = io();
 
 const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
+const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
 
 const landingScreen = document.getElementById("landingScreen");
 const startMenuBtn = document.getElementById("startMenuBtn");
@@ -53,7 +53,9 @@ const state = {
 };
 
 const snapshots = [];
-const INTERPOLATION_DELAY = 20;
+const INTERPOLATION_DELAY = 12;
+const INPUT_SEND_RATE = 90;
+let hudFrameCounter = 0;
 
 let chatOpen = false;
 const chatMessages = [];
@@ -273,7 +275,8 @@ function drawGrid() {
 }
 
 function drawFood() {
-  for (const f of state.food) {
+  for (let i = 0; i < state.food.length; i++) {
+    const f = state.food[i];
     const s = worldToScreen(f.x, f.y);
     const rr = f.r * state.zoom;
 
@@ -287,7 +290,8 @@ function drawFood() {
 }
 
 function drawViruses() {
-  for (const virus of state.viruses) {
+  for (let i = 0; i < state.viruses.length; i++) {
+    const virus = state.viruses[i];
     const s = worldToScreen(virus.x, virus.y);
     const rr = virus.r * state.zoom;
 
@@ -322,7 +326,8 @@ function drawPlayers() {
     return am - bm;
   });
 
-  for (const player of sorted) {
+  for (let pi = 0; pi < sorted.length; pi++) {
+    const player = sorted[pi];
     for (const cell of player.cells) {
       const s = worldToScreen(cell.x, cell.y);
       const r = radiusFromMass(cell.mass) * state.zoom;
@@ -396,6 +401,9 @@ function drawMinimap() {
 }
 
 function updateHud() {
+  hudFrameCounter++;
+  if (hudFrameCounter % 4 !== 0) return;
+
   massValue.textContent = Math.floor(getMyTotalMass());
   leaderboardEntries.innerHTML = state.leaderboard
     .map((entry, i) => `<div>${i + 1}. ${entry.name} - ${entry.mass}</div>`)
@@ -494,7 +502,7 @@ window.addEventListener("mousemove", (e) => {
 });
 
 window.addEventListener("keydown", (e) => {
-  if (e.key === "g" || e.key === "G") {
+  if (e.key === "\\") {
     e.preventDefault();
     setChatOpen(!chatOpen);
     return;
@@ -546,7 +554,7 @@ if (chatInput) {
       }
     }
 
-    if (e.key === "Escape" || e.key === "g" || e.key === "G") {
+    if (e.key === "Escape" || e.key === "\\") {
       e.preventDefault();
       setChatOpen(false);
     }
@@ -614,14 +622,12 @@ socket.on("chat", (msg) => {
 });
 
 socket.on("state", (serverState) => {
-  console.log("debugPlayerCount:", serverState.debugPlayerCount);
-
   snapshots.push({
     time: Date.now(),
     state: cloneStateForSnapshot(serverState)
   });
 
-  while (snapshots.length > 10) {
+  while (snapshots.length > 6) {
     snapshots.shift();
   }
 });
@@ -629,7 +635,7 @@ socket.on("state", (serverState) => {
 setInterval(() => {
   if (!state.connected) return;
 
-  socket.emit("input", {
+  socket.volatile.emit("input", {
     mouseX: state.mouseX,
     mouseY: state.mouseY,
     split: state.splitQueued,
@@ -638,7 +644,7 @@ setInterval(() => {
 
   state.splitQueued = false;
   state.ejectQueued = false;
-}, 1000 / 60);
+}, 1000 / INPUT_SEND_RATE);
 
 function loop() {
   const interpolated = getInterpolatedState();
