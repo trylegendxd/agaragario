@@ -14,7 +14,7 @@ app.use(express.static(path.join(__dirname, "public")));
 const WORLD_SIZE = 12000;
 const FOOD_COUNT = 1000;
 const VIRUS_COUNT = 35;
-const TICK_RATE = 20;
+const TICK_RATE = 35;
 const MAX_CELLS = 16;
 
 // How far beyond the visible area to still send entities
@@ -485,3 +485,4 @@ setInterval(() => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
 });
+
