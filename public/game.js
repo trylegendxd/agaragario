@@ -27,6 +27,15 @@ const loginBtn = document.getElementById("loginBtn");
 const logoutBtn = document.getElementById("logoutBtn");
 const authStatus = document.getElementById("authStatus");
 
+const walletPanel = document.getElementById("walletPanel");
+const walletValue = document.getElementById("walletValue");
+const walletAmountInput = document.getElementById("walletAmountInput");
+const withdrawAddressInput = document.getElementById("withdrawAddressInput");
+const addBalanceBtn = document.getElementById("addBalanceBtn");
+const withdrawBtn = document.getElementById("withdrawBtn");
+const walletStatus = document.getElementById("walletStatus");
+const menuStatus = document.getElementById("menuStatus");
+
 let W = (canvas.width = window.innerWidth);
 let H = (canvas.height = window.innerHeight);
 
@@ -49,17 +58,15 @@ const state = {
   ejectQueued: false,
   cameraX: 0,
   cameraY: 0,
-  zoom: 1
+  zoom: 1,
+  wallet: 0
 };
 
 const snapshots = [];
 const INTERPOLATION_DELAY = 16;
-const INPUT_SEND_RATE = 90;
 let isJoinInFlight = false;
 let inMatch = false;
-
 let chatOpen = false;
-const chatMessages = [];
 let currentUser = null;
 
 function radiusFromMass(mass) {
@@ -87,13 +94,46 @@ async function api(path, body = null) {
     credentials: "same-origin"
   });
 
-  return res.json();
+  let data = {};
+  try {
+    data = await res.json();
+  } catch {
+    data = {};
+  }
+
+  if (!res.ok && !data.error) {
+    data.error = `Request failed (${res.status})`;
+  }
+
+  return data;
 }
 
 function setAuthStatus(text, isError = false) {
   if (!authStatus) return;
-  authStatus.textContent = text;
+  authStatus.textContent = text || "";
   authStatus.style.color = isError ? "#c62828" : "#2e7d32";
+}
+
+function setWalletStatus(text, isError = false) {
+  if (!walletStatus) return;
+  walletStatus.textContent = text || "";
+  walletStatus.style.color = isError ? "#c62828" : "#2e7d32";
+}
+
+function setMenuStatus(text, isError = false) {
+  if (!menuStatus) return;
+  menuStatus.textContent = text || "";
+  menuStatus.style.color = isError ? "#c62828" : "#2e7d32";
+}
+
+function formatMoney(value) {
+  const num = Number(value || 0);
+  return `$${num.toFixed(2)}`;
+}
+
+function updateWalletUi(wallet) {
+  state.wallet = Number(wallet || 0);
+  if (walletValue) walletValue.textContent = formatMoney(state.wallet);
 }
 
 function setPlayButtonState(busy = false) {
@@ -102,39 +142,83 @@ function setPlayButtonState(busy = false) {
   playBtn.textContent = busy ? "Loading..." : "Enter Game";
 }
 
+function setAuthButtonsLoggedIn(loggedIn) {
+  if (logoutBtn) logoutBtn.classList.toggle("hidden", !loggedIn);
+  if (loginBtn) loginBtn.classList.toggle("hidden", loggedIn);
+  if (registerBtn) registerBtn.classList.toggle("hidden", loggedIn);
+}
+
+function showLandingWithAuth() {
+  if (landingScreen) landingScreen.classList.remove("hidden");
+  if (authPanel) authPanel.classList.remove("hidden");
+  if (menu) menu.classList.add("hidden");
+}
+
+function showMenu() {
+  if (landingScreen) landingScreen.classList.add("hidden");
+  if (authPanel) authPanel.classList.add("hidden");
+  if (menu) menu.classList.remove("hidden");
+}
+
+function hideMenusForGame() {
+  if (landingScreen) landingScreen.classList.add("hidden");
+  if (authPanel) authPanel.classList.add("hidden");
+  if (menu) menu.classList.add("hidden");
+}
+
+function resetGameVisualState() {
+  snapshots.length = 0;
+  state.food = [];
+  state.viruses = [];
+  state.players = [];
+  state.leaderboard = [];
+  state.cameraX = 0;
+  state.cameraY = 0;
+  state.zoom = 1;
+  massValue.textContent = "0";
+  leaderboardEntries.innerHTML = "";
+  setChatOpen(false);
+}
+
 function updateAuthUi(user) {
   currentUser = user || null;
-
-  if (logoutBtn) logoutBtn.style.display = user ? "block" : "none";
-  if (loginBtn) loginBtn.style.display = user ? "none" : "block";
-  if (registerBtn) registerBtn.style.display = user ? "none" : "block";
+  setAuthButtonsLoggedIn(!!user);
+  setPlayButtonState(false);
+  isJoinInFlight = false;
 
   if (user) {
+    if (authUsername) authUsername.value = user.username || "";
+    if (authPassword) authPassword.value = "";
+    updateWalletUi(user.credits || 0);
     setAuthStatus(`Logged in as ${user.username}`);
-    if (authUsername) authUsername.value = user.username;
-    if (authPassword) authPassword.value = "";
-
-    if (authPanel) authPanel.style.display = "none";
-    if (landingScreen) landingScreen.style.display = "none";
-    menu.style.display = "flex";
-    setPlayButtonState(false);
+    setMenuStatus("");
+    setWalletStatus("");
+    showMenu();
   } else {
-    setAuthStatus("Not logged in.", false);
-
     if (authPassword) authPassword.value = "";
-    if (authPanel) authPanel.style.display = "none";
-    if (landingScreen) landingScreen.style.display = "flex";
-    menu.style.display = "none";
-    setPlayButtonState(false);
-    isJoinInFlight = false;
     inMatch = false;
+    resetGameVisualState();
+    updateWalletUi(0);
+    setAuthStatus("Not logged in.", false);
+    setMenuStatus("");
+    setWalletStatus("");
+    showLandingWithAuth();
+  }
+}
+
+async function refreshWallet() {
+  if (!currentUser) return;
+  const data = await api("/api/balance");
+  if (!data.error && typeof data.wallet !== "undefined") {
+    updateWalletUi(data.wallet);
+    if (currentUser) currentUser.credits = Number(data.wallet || 0);
   }
 }
 
 async function checkSession() {
   try {
     const data = await api("/api/me");
-    updateAuthUi(data.user);
+    updateAuthUi(data.user || null);
   } catch (err) {
     console.error("SESSION CHECK ERROR:", err);
     setAuthStatus("Failed to check session.", true);
@@ -144,7 +228,7 @@ async function checkSession() {
 function renderChat() {
   if (!chatMessagesEl) return;
 
-  chatMessagesEl.innerHTML = chatMessages
+  chatMessagesEl.innerHTML = stateChatMessages
     .map(
       (msg) => `
         <div class="chatMessage">
@@ -158,16 +242,18 @@ function renderChat() {
   chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
 }
 
+const stateChatMessages = [];
+
 function pushChatMessage(msg) {
-  chatMessages.push(msg);
-  while (chatMessages.length > 40) {
-    chatMessages.shift();
+  stateChatMessages.push(msg);
+  while (stateChatMessages.length > 40) {
+    stateChatMessages.shift();
   }
   renderChat();
 }
 
 function setChatOpen(open) {
-  chatOpen = open;
+  chatOpen = !!open && inMatch;
   if (!chatBox) return;
 
   chatBox.style.display = chatOpen ? "block" : "none";
@@ -259,7 +345,7 @@ function drawGrid() {
   const offsetX = ((-state.cameraX * state.zoom) % grid + grid) % grid;
   const offsetY = ((-state.cameraY * state.zoom) % grid + grid) % grid;
 
-  ctx.strokeStyle = "#eeeeee";
+  ctx.strokeStyle = "#ececec";
   ctx.lineWidth = 1;
 
   for (let x = offsetX; x <= W; x += grid) {
@@ -401,7 +487,7 @@ function drawMinimap() {
     const mx = x + ((centerX + state.worldSize / 2) / state.worldSize) * mapW;
     const my = y + ((centerY + state.worldSize / 2) / state.worldSize) * mapH;
 
-    ctx.fillStyle = p.id === state.myId ? "#33c3ff" : "#888";
+    ctx.fillStyle = p.id === state.myId ? "#33c3ff" : (p.isBot ? "#55aa55" : "#888");
     ctx.beginPath();
     ctx.arc(mx, my, p.id === state.myId ? 4 : 2, 0, Math.PI * 2);
     ctx.fill();
@@ -411,7 +497,7 @@ function drawMinimap() {
 function updateHud() {
   massValue.textContent = Math.floor(getMyTotalMass());
   leaderboardEntries.innerHTML = state.leaderboard
-    .map((entry, i) => `<div>${i + 1}. ${entry.name} - ${entry.mass}</div>`)
+    .map((entry, i) => `<div>${i + 1}. ${escapeHtml(entry.name)} - ${entry.mass}</div>`)
     .join("");
 }
 
@@ -429,22 +515,24 @@ function render() {
 function cloneStateForSnapshot(serverState) {
   return {
     worldSize: serverState.worldSize,
-    food: serverState.food.map((f) => ({ ...f })),
-    viruses: serverState.viruses.map((v) => ({ ...v })),
-    leaderboard: serverState.leaderboard.map((e) => ({ ...e })),
-    players: serverState.players.map((p) => ({
+    food: (serverState.food || []).map((f) => ({ ...f })),
+    viruses: (serverState.viruses || []).map((v) => ({ ...v })),
+    leaderboard: (serverState.leaderboard || []).map((e) => ({ ...e })),
+    wallet: Number(serverState.wallet || 0),
+    players: (serverState.players || []).map((p) => ({
       id: p.id,
       name: p.name,
       color: p.color,
+      isBot: !!p.isBot,
       totalMass: p.totalMass,
-      cells: p.cells.map((c) => ({ ...c }))
+      cells: (p.cells || []).map((c) => ({ ...c }))
     }))
   };
 }
 
 function interpolatePlayers(older, newer, alpha) {
-  const oldMap = new Map(older.players.map((p) => [p.id, p]));
-  const newMap = new Map(newer.players.map((p) => [p.id, p]));
+  const oldMap = new Map((older.players || []).map((p) => [p.id, p]));
+  const newMap = new Map((newer.players || []).map((p) => [p.id, p]));
   const out = [];
 
   for (const [id, newPlayer] of newMap) {
@@ -476,10 +564,7 @@ function getInterpolatedState() {
   let newer = snapshots[snapshots.length - 1];
 
   for (let i = 0; i < snapshots.length - 1; i++) {
-    if (
-      snapshots[i].time <= renderTime &&
-      snapshots[i + 1].time >= renderTime
-    ) {
+    if (snapshots[i].time <= renderTime && snapshots[i + 1].time >= renderTime) {
       older = snapshots[i];
       newer = snapshots[i + 1];
       break;
@@ -498,6 +583,7 @@ function getInterpolatedState() {
     food: newer.state.food,
     viruses: newer.state.viruses,
     leaderboard: newer.state.leaderboard,
+    wallet: newer.state.wallet,
     players: interpolatePlayers(older.state, newer.state, alpha)
   };
 }
@@ -510,7 +596,10 @@ window.addEventListener("mousemove", (e) => {
 window.addEventListener("keydown", (e) => {
   if (e.key === "\\") {
     e.preventDefault();
-    setChatOpen(!chatOpen);
+
+    if (inMatch) {
+      setChatOpen(!chatOpen);
+    }
     return;
   }
 
@@ -529,53 +618,130 @@ window.addEventListener("keydown", (e) => {
 
 async function joinGame() {
   if (isJoinInFlight || inMatch) return;
+
   if (!currentUser) {
     setAuthStatus("You must log in first.", true);
+    showLandingWithAuth();
     return;
   }
 
   isJoinInFlight = true;
   setPlayButtonState(true);
+  setMenuStatus("");
+  setWalletStatus("");
 
   try {
-    const data = await api("/api/game/start", {});
+    const data = await api("/api/game/enter", {});
+
     if (data.error) {
-      if (data.user) updateAuthUi(data.user);
-      setAuthStatus(data.error, true);
+      setMenuStatus(data.error, true);
       return;
     }
 
-    if (data.user) updateAuthUi(data.user);
+    if (typeof data.wallet !== "undefined") {
+      updateWalletUi(data.wallet);
+      currentUser.credits = Number(data.wallet || 0);
+    }
+
+    resetGameVisualState();
 
     socket.emit("join", {
-      name: nameInput.value.trim() || "Player",
+      name: (nameInput?.value || "").trim() || "Player",
       color: colorInput ? colorInput.value : "#33c3ff"
     });
-
-    menu.style.display = "none";
-    setChatOpen(false);
-    inMatch = true;
   } catch (err) {
-    setAuthStatus("Failed to start match.", true);
+    console.error("JOIN GAME ERROR:", err);
+    setMenuStatus("Failed to start match.", true);
   } finally {
     isJoinInFlight = false;
     if (!inMatch) setPlayButtonState(false);
   }
 }
 
-playBtn.addEventListener("click", joinGame);
+async function handleAddBalance() {
+  if (!currentUser) return;
 
-nameInput.addEventListener("keydown", (e) => {
+  const amount = Number(walletAmountInput?.value || 0);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    setWalletStatus("Enter a valid amount.", true);
+    return;
+  }
+
+  addBalanceBtn.disabled = true;
+  withdrawBtn.disabled = true;
+  setWalletStatus("Adding balance...");
+
+  try {
+    const data = await api("/api/credits/add", { amount });
+    if (data.error) {
+      setWalletStatus(data.error, true);
+      return;
+    }
+
+    updateWalletUi(data.wallet);
+    currentUser.credits = Number(data.wallet || 0);
+    if (walletAmountInput) walletAmountInput.value = "";
+    setWalletStatus("Balance added successfully.");
+  } catch (err) {
+    console.error("ADD BALANCE ERROR:", err);
+    setWalletStatus("Failed to add balance.", true);
+  } finally {
+    addBalanceBtn.disabled = false;
+    withdrawBtn.disabled = false;
+  }
+}
+
+async function handleWithdraw() {
+  if (!currentUser) return;
+
+  const amount = Number(walletAmountInput?.value || 0);
+  const address = String(withdrawAddressInput?.value || "").trim();
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    setWalletStatus("Enter a valid withdrawal amount.", true);
+    return;
+  }
+
+  if (!address) {
+    setWalletStatus("Enter your Solana wallet address.", true);
+    return;
+  }
+
+  addBalanceBtn.disabled = true;
+  withdrawBtn.disabled = true;
+  setWalletStatus("Creating withdrawal request...");
+
+  try {
+    const data = await api("/api/credits/withdraw", { amount, address });
+    if (data.error) {
+      setWalletStatus(data.error, true);
+      return;
+    }
+
+    updateWalletUi(data.wallet);
+    currentUser.credits = Number(data.wallet || 0);
+    if (walletAmountInput) walletAmountInput.value = "";
+    setWalletStatus("Withdrawal request submitted.");
+  } catch (err) {
+    console.error("WITHDRAW ERROR:", err);
+    setWalletStatus("Failed to withdraw.", true);
+  } finally {
+    addBalanceBtn.disabled = false;
+    withdrawBtn.disabled = false;
+  }
+}
+
+playBtn?.addEventListener("click", joinGame);
+
+nameInput?.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
     joinGame();
   }
 });
 
-if (startMenuBtn) {
-  startMenuBtn.addEventListener("click", () => {
-    if (authPanel) authPanel.style.display = "block";
-  });
-}
+startMenuBtn?.addEventListener("click", () => {
+  if (authPanel) authPanel.classList.remove("hidden");
+});
 
 if (chatInput) {
   chatInput.addEventListener("keydown", (e) => {
@@ -596,8 +762,8 @@ if (chatInput) {
   });
 }
 
-if (registerBtn) {
-  registerBtn.addEventListener("click", async () => {
+registerBtn?.addEventListener("click", async () => {
+  try {
     const username = authUsername.value.trim();
     const password = authPassword.value;
 
@@ -608,11 +774,15 @@ if (registerBtn) {
     }
 
     updateAuthUi(data.user);
-  });
-}
+    setMenuStatus("Welcome bonus received: $5.00");
+  } catch (err) {
+    console.error("REGISTER ERROR:", err);
+    setAuthStatus("Failed to register.", true);
+  }
+});
 
-if (loginBtn) {
-  loginBtn.addEventListener("click", async () => {
+loginBtn?.addEventListener("click", async () => {
+  try {
     const username = authUsername.value.trim();
     const password = authPassword.value;
 
@@ -623,15 +793,24 @@ if (loginBtn) {
     }
 
     updateAuthUi(data.user);
-  });
-}
+  } catch (err) {
+    console.error("LOGIN ERROR:", err);
+    setAuthStatus("Failed to log in.", true);
+  }
+});
 
-if (logoutBtn) {
-  logoutBtn.addEventListener("click", async () => {
+logoutBtn?.addEventListener("click", async () => {
+  try {
     await api("/api/logout", {});
     updateAuthUi(null);
-  });
-}
+  } catch (err) {
+    console.error("LOGOUT ERROR:", err);
+    setAuthStatus("Failed to log out.", true);
+  }
+});
+
+addBalanceBtn?.addEventListener("click", handleAddBalance);
+withdrawBtn?.addEventListener("click", handleWithdraw);
 
 socket.on("connect", () => {
   state.connected = true;
@@ -642,12 +821,44 @@ socket.on("disconnect", () => {
   state.connected = false;
   inMatch = false;
   setPlayButtonState(false);
+  resetGameVisualState();
+
+  if (currentUser) {
+    showMenu();
+    setMenuStatus("Connection lost. Back in menu.", true);
+  } else {
+    showLandingWithAuth();
+  }
+});
+
+socket.on("joined", () => {
+  inMatch = true;
+  hideMenusForGame();
+  setPlayButtonState(false);
+  setMenuStatus("");
+  setWalletStatus("");
+});
+
+socket.on("joinError", (data) => {
+  inMatch = false;
+  setPlayButtonState(false);
+  showMenu();
+  setMenuStatus(data?.error || "Failed to join match.", true);
+});
+
+socket.on("dead", async (data) => {
+  inMatch = false;
+  resetGameVisualState();
+  showMenu();
+  setPlayButtonState(false);
+  setMenuStatus(data?.message || "You died and returned to the menu.", true);
+  await refreshWallet();
 });
 
 socket.on("chatHistory", (history) => {
-  chatMessages.length = 0;
-  for (const msg of history) {
-    chatMessages.push(msg);
+  stateChatMessages.length = 0;
+  for (const msg of history || []) {
+    stateChatMessages.push(msg);
   }
   renderChat();
 });
@@ -665,10 +876,15 @@ socket.on("state", (serverState) => {
   while (snapshots.length > 10) {
     snapshots.shift();
   }
+
+  if (typeof serverState.wallet !== "undefined") {
+    updateWalletUi(serverState.wallet);
+    if (currentUser) currentUser.credits = Number(serverState.wallet || 0);
+  }
 });
 
 setInterval(() => {
-  if (!state.connected) return;
+  if (!state.connected || !inMatch) return;
 
   socket.emit("input", {
     mouseX: state.mouseX,
@@ -690,6 +906,10 @@ function loop() {
     state.viruses = interpolated.viruses;
     state.players = interpolated.players;
     state.leaderboard = interpolated.leaderboard;
+
+    if (typeof interpolated.wallet !== "undefined") {
+      updateWalletUi(interpolated.wallet);
+    }
   }
 
   updateCamera();
@@ -700,7 +920,5 @@ function loop() {
 spawnMoneySigns(moneyBg, 28);
 spawnMoneySigns(menuMoneyBg, 28);
 checkSession();
-
 loop();
-
 setPlayButtonState(false);
