@@ -656,13 +656,6 @@ async function joinGame() {
       return;
     }
 
-    if (typeof data.wallet !== "undefined") {
-      updateWalletUi(data.wallet);
-      currentUser.credits = Number(data.wallet || 0);
-    }
-
-    resetGameVisualState();
-
     socket.emit("join", {
       name: (nameInput?.value || "").trim() || "Player",
       color: colorInput ? colorInput.value : "#33c3ff"
@@ -940,4 +933,5 @@ spawnMoneySigns(menuMoneyBg, 28);
 checkSession();
 loop();
 setPlayButtonState(false);
+
 
