@@ -24,6 +24,9 @@ const players = new Map();
 const food = [];
 const viruses = [];
 
+const chatMessages = [];
+const MAX_CHAT_MESSAGES = 40;
+
 function rand(min, max) {
   return Math.random() * (max - min) + min;
 }
@@ -105,6 +108,28 @@ function createPlayer(id, name) {
     wantsEject: false,
     cells: [respawnCell()]
   };
+}
+
+function addChatMessage(name, text) {
+  const cleanName = String(name || "Player").slice(0, 16);
+  const cleanText = String(text || "").trim().slice(0, 160);
+
+  if (!cleanText) return;
+
+  const msg = {
+    id: Math.random().toString(36).slice(2),
+    name: cleanName,
+    text: cleanText,
+    time: Date.now()
+  };
+
+  chatMessages.push(msg);
+
+  while (chatMessages.length > MAX_CHAT_MESSAGES) {
+    chatMessages.shift();
+  }
+
+  io.sockets.emit("chat", msg);
 }
 
 function resetWorldObjects() {
@@ -369,8 +394,6 @@ function buildSnapshotFor(targetPlayer) {
     : total;
 
   const biggestRadius = radiusFromMass(biggestCellMass);
-
-  // Approx visible radius
   const visibleRadius = Math.max(2200, biggestRadius * 6 + SNAPSHOT_PADDING);
 
   const visibleFood = [];
@@ -432,7 +455,8 @@ app.get("/debug/players", (req, res) => {
       name: p.name,
       totalMass: Math.round(totalMass(p)),
       cells: p.cells.length
-    }))
+    })),
+    chatMessages: chatMessages.length
   });
 });
 
@@ -443,6 +467,15 @@ io.on("connection", (socket) => {
     const player = createPlayer(socket.id, name);
     players.set(socket.id, player);
     console.log("joined:", socket.id, name, "total players:", players.size);
+
+    socket.emit("chatHistory", chatMessages);
+    addChatMessage("SERVER", `${player.name} joined the game`);
+  });
+
+  socket.on("chat", (text) => {
+    const player = players.get(socket.id);
+    if (!player) return;
+    addChatMessage(player.name, text);
   });
 
   socket.on("input", (input) => {
@@ -456,6 +489,10 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    const player = players.get(socket.id);
+    if (player) {
+      addChatMessage("SERVER", `${player.name} left the game`);
+    }
     players.delete(socket.id);
     console.log("disconnected:", socket.id, "total players:", players.size);
   });
@@ -489,5 +526,3 @@ setInterval(() => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
 });
-
-
