@@ -19,6 +19,13 @@ const chatBox = document.getElementById("chatBox");
 const chatMessagesEl = document.getElementById("chatMessages");
 const chatInput = document.getElementById("chatInput");
 
+const authUsername = document.getElementById("authUsername");
+const authPassword = document.getElementById("authPassword");
+const registerBtn = document.getElementById("registerBtn");
+const loginBtn = document.getElementById("loginBtn");
+const logoutBtn = document.getElementById("logoutBtn");
+const authStatus = document.getElementById("authStatus");
+
 let W = (canvas.width = window.innerWidth);
 let H = (canvas.height = window.innerHeight);
 
@@ -49,6 +56,7 @@ const INTERPOLATION_DELAY = 20;
 
 let chatOpen = false;
 const chatMessages = [];
+let currentUser = null;
 
 function radiusFromMass(mass) {
   return Math.sqrt(mass) * 4.8;
@@ -65,6 +73,49 @@ function escapeHtml(text) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+async function api(path, body = null) {
+  const res = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: body ? { "Content-Type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined,
+    credentials: "same-origin"
+  });
+
+  return res.json();
+}
+
+function setAuthStatus(text, isError = false) {
+  if (!authStatus) return;
+  authStatus.textContent = text;
+  authStatus.style.color = isError ? "#c62828" : "#2e7d32";
+}
+
+function updateAuthUi(user) {
+  currentUser = user || null;
+
+  if (logoutBtn) logoutBtn.style.display = user ? "block" : "none";
+  if (loginBtn) loginBtn.style.display = user ? "none" : "block";
+  if (registerBtn) registerBtn.style.display = user ? "none" : "block";
+
+  if (user) {
+    setAuthStatus(`Logged in as ${user.username}`);
+    if (authUsername) authUsername.value = user.username;
+    if (authPassword) authPassword.value = "";
+  } else {
+    setAuthStatus("Not logged in.", false);
+  }
+}
+
+async function checkSession() {
+  try {
+    const data = await api("/api/me");
+    updateAuthUi(data.user);
+  } catch (err) {
+    console.error("SESSION CHECK ERROR:", err);
+    setAuthStatus("Failed to check session.", true);
+  }
 }
 
 function renderChat() {
@@ -457,7 +508,6 @@ function joinGame() {
     color: colorInput ? colorInput.value : "#33c3ff"
   });
 
-  if (landingScreen) landingScreen.style.display = "none";
   menu.style.display = "none";
   setChatOpen(false);
 }
@@ -472,6 +522,11 @@ nameInput.addEventListener("keydown", (e) => {
 
 if (startMenuBtn) {
   startMenuBtn.addEventListener("click", () => {
+    if (!currentUser) {
+      setAuthStatus("Please login or register first.", true);
+      return;
+    }
+
     if (landingScreen) landingScreen.style.display = "none";
     menu.style.display = "flex";
   });
@@ -493,6 +548,45 @@ if (chatInput) {
     }
 
     e.stopPropagation();
+  });
+}
+
+if (registerBtn) {
+  registerBtn.addEventListener("click", async () => {
+    const username = authUsername.value.trim();
+    const password = authPassword.value;
+
+    const data = await api("/api/register", { username, password });
+    if (data.error) {
+      setAuthStatus(data.error, true);
+      return;
+    }
+
+    updateAuthUi(data.user);
+  });
+}
+
+if (loginBtn) {
+  loginBtn.addEventListener("click", async () => {
+    const username = authUsername.value.trim();
+    const password = authPassword.value;
+
+    const data = await api("/api/login", { username, password });
+    if (data.error) {
+      setAuthStatus(data.error, true);
+      return;
+    }
+
+    updateAuthUi(data.user);
+  });
+}
+
+if (logoutBtn) {
+  logoutBtn.addEventListener("click", async () => {
+    await api("/api/logout", {});
+    updateAuthUi(null);
+    if (landingScreen) landingScreen.style.display = "flex";
+    menu.style.display = "none";
   });
 }
 
@@ -562,6 +656,6 @@ function loop() {
 
 spawnMoneySigns(moneyBg, 28);
 spawnMoneySigns(menuMoneyBg, 28);
+checkSession();
 
 loop();
-
