@@ -80,11 +80,7 @@ const sessionMiddleware = session({
   }
 });
 
-function wrap(middleware) {
-  return (socket, next) => middleware(socket.request, {}, next);
-}
-
-io.use(wrap(sessionMiddleware));
+io.engine.use(sessionMiddleware);
 
 app.use(express.json());
 app.use(sessionMiddleware);
@@ -1032,120 +1028,113 @@ io.on("connection", (socket) => {
   console.log("socket connected:", socket.id);
 
   socket.on("join", (payload) => {
+  try {
     const req = socket.request;
+    const sessionUser = req.session?.user;
 
-    req.session.reload((reloadErr) => {
-      if (reloadErr) {
-        console.error("SESSION RELOAD ERROR:", reloadErr);
-        socket.emit("joinError", { error: "Session expired. Please log in again." });
+    if (!sessionUser?.id) {
+      socket.emit("joinError", { error: "You must be logged in." });
+      return;
+    }
+
+    const freshUser = getUserById.get(sessionUser.id);
+    if (!freshUser) {
+      socket.emit("joinError", { error: "User not found." });
+      return;
+    }
+
+    const existingSocketId = playerByUserId.get(freshUser.id);
+    if (
+      existingSocketId &&
+      existingSocketId !== socket.id &&
+      players.has(existingSocketId)
+    ) {
+      socket.emit("joinError", { error: "You are already in a match." });
+      return;
+    }
+
+    if (!req.session.gameEntryReady) {
+      socket.emit("joinError", { error: "Enter the game from the menu first." });
+      return;
+    }
+
+    if (Number(freshUser.credits || 0) < GAME_ENTRY_COST) {
+      socket.emit("joinError", { error: "Not enough balance to play." });
+      return;
+    }
+
+    const wallet = spendCreditsTx(
+      freshUser.id,
+      GAME_ENTRY_COST,
+      "game_entry",
+      "Entered a match"
+    );
+
+    req.session.user = {
+      id: freshUser.id,
+      username: freshUser.username,
+      credits: wallet
+    };
+    req.session.gameEntryReady = false;
+
+    req.session.save((saveErr) => {
+      if (saveErr) {
+        console.error("SESSION SAVE ERROR AFTER JOIN:", saveErr);
+
+        try {
+          const refundedWallet = addCreditsTx(
+            freshUser.id,
+            GAME_ENTRY_COST,
+            "game_entry_refund",
+            "Refund after failed join save"
+          );
+
+          req.session.user = {
+            id: freshUser.id,
+            username: freshUser.username,
+            credits: refundedWallet
+          };
+
+          req.session.save(() => {});
+        } catch (refundErr) {
+          console.error("REFUND ERROR:", refundErr);
+        }
+
+        socket.emit("joinError", { error: "Failed to save session." });
         return;
       }
 
-      try {
-        const sessionUser = req.session?.user;
-
-        if (!sessionUser?.id) {
-          socket.emit("joinError", { error: "You must be logged in." });
-          return;
-        }
-
-        const freshUser = getUserById.get(sessionUser.id);
-        if (!freshUser) {
-          socket.emit("joinError", { error: "User not found." });
-          return;
-        }
-
-        const existingSocketId = playerByUserId.get(freshUser.id);
-        if (
-          existingSocketId &&
-          existingSocketId !== socket.id &&
-          players.has(existingSocketId)
-        ) {
-          socket.emit("joinError", { error: "You are already in a match." });
-          return;
-        }
-
-        if (!req.session.gameEntryReady) {
-          socket.emit("joinError", { error: "Enter the game from the menu first." });
-          return;
-        }
-
-        if (Number(freshUser.credits || 0) < GAME_ENTRY_COST) {
-          socket.emit("joinError", { error: "Not enough balance to play." });
-          return;
-        }
-
-        const wallet = spendCreditsTx(
-          freshUser.id,
-          GAME_ENTRY_COST,
-          "game_entry",
-          "Entered a match"
-        );
-
-        req.session.user = {
+      const player = createHumanPlayer(
+        socket.id,
+        {
           id: freshUser.id,
-          username: freshUser.username,
-          credits: wallet
-        };
-        req.session.gameEntryReady = false;
+          username: freshUser.username
+        },
+        payload
+      );
 
-        req.session.save((saveErr) => {
-          if (saveErr) {
-            console.error("SESSION SAVE ERROR AFTER JOIN:", saveErr);
+      players.set(socket.id, player);
+      playerByUserId.set(freshUser.id, socket.id);
 
-            try {
-              const refundedWallet = addCreditsTx(
-                freshUser.id,
-                GAME_ENTRY_COST,
-                "game_entry_refund",
-                "Refund after failed session save"
-              );
+      socket.emit("chatHistory", chatMessages);
+      socket.emit("joined", {
+        ok: true,
+        wallet
+      });
 
-              req.session.user = {
-                id: freshUser.id,
-                username: freshUser.username,
-                credits: refundedWallet
-              };
-            } catch (refundErr) {
-              console.error("REFUND ERROR AFTER SESSION SAVE FAILURE:", refundErr);
-            }
-
-            socket.emit("joinError", { error: "Failed to save session." });
-            return;
-          }
-
-          const player = createHumanPlayer(
-            socket.id,
-            {
-              id: freshUser.id,
-              username: freshUser.username
-            },
-            payload
-          );
-
-          players.set(socket.id, player);
-          playerByUserId.set(freshUser.id, socket.id);
-
-          socket.emit("chatHistory", chatMessages);
-          socket.emit("joined", {
-            ok: true,
-            wallet
-          });
-
-          addChatMessage("SERVER", `${player.name} joined the game`);
-        });
-      } catch (err) {
-        console.error("JOIN ERROR:", err);
-
-        if (err.code === "INSUFFICIENT_CREDITS") {
-          socket.emit("joinError", { error: "Not enough balance to play." });
-          return;
-        }
-
-        socket.emit("joinError", { error: "Failed to join the match." });
-      }
+      addChatMessage("SERVER", `${player.name} joined the game`);
     });
-  });
+  } catch (err) {
+    console.error("JOIN ERROR:", err);
+
+    if (err.code === "INSUFFICIENT_CREDITS") {
+      socket.emit("joinError", { error: "Not enough balance to play." });
+      return;
+    }
+
+    socket.emit("joinError", { error: "Failed to join the match." });
+  }
+});
 
   socket.on("chat", (text) => {
     const player = players.get(socket.id);
@@ -1230,3 +1219,4 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
   console.log(`Using database: ${DB_PATH}`);
 });
+
