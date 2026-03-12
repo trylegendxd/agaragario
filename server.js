@@ -496,25 +496,27 @@ app.post("/api/payments/solana/quote", requireAuth, (req, res) => {
 
 app.post("/api/game/enter", requireAuth, (req, res) => {
   try {
+    const freshUser = getUserById.get(req.user.id);
+    if (!freshUser) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
     const alreadySocket = playerByUserId.get(req.user.id);
     if (alreadySocket && players.has(alreadySocket)) {
       return res.json({
         ok: true,
         alreadyInGame: true,
-        wallet: Number(req.user.credits || 0)
+        wallet: Number(freshUser.credits || 0)
       });
     }
 
-    const wallet = spendCreditsTx(
-      req.user.id,
-      GAME_ENTRY_COST,
-      "game_entry",
-      "Entered a match"
-    );
+    if (Number(freshUser.credits || 0) < GAME_ENTRY_COST) {
+      return res.status(400).json({
+        error: "You need at least 1 credit to play."
+      });
+    }
 
-    req.session.user.credits = wallet;
     req.session.gameEntryReady = true;
-
     req.session.save((err) => {
       if (err) {
         console.error("SESSION SAVE ERROR:", err);
@@ -523,15 +525,11 @@ app.post("/api/game/enter", requireAuth, (req, res) => {
 
       res.json({
         ok: true,
-        wallet,
+        wallet: Number(freshUser.credits || 0),
         cost: GAME_ENTRY_COST
       });
     });
   } catch (err) {
-    if (err.code === "INSUFFICIENT_CREDITS") {
-      return res.status(400).json({ error: "You need at least 1 credit to play." });
-    }
-
     console.error("GAME ENTER ERROR:", err);
     res.status(500).json({ error: "Failed to enter the game." });
   }
@@ -1020,8 +1018,16 @@ io.on("connection", (socket) => {
   console.log("socket connected:", socket.id);
 
   socket.on("join", (payload) => {
+  const req = socket.request;
+
+  req.session.reload((reloadErr) => {
+    if (reloadErr) {
+      console.error("SESSION RELOAD ERROR:", reloadErr);
+      socket.emit("joinError", { error: "Session expired. Please log in again." });
+      return;
+    }
+
     try {
-      const req = socket.request;
       const sessionUser = req.session?.user;
 
       if (!sessionUser?.id) {
@@ -1052,22 +1058,60 @@ io.on("connection", (socket) => {
         return;
       }
 
-      const player = createHumanPlayer(socket.id, freshUser, payload);
-      players.set(socket.id, player);
-      playerByUserId.set(freshUser.id, socket.id);
+      if (Number(freshUser.credits || 0) < GAME_ENTRY_COST) {
+        socket.emit("joinError", { error: "Not enough balance to play." });
+        return;
+      }
 
+      const wallet = spendCreditsTx(
+        freshUser.id,
+        GAME_ENTRY_COST,
+        "game_entry",
+        "Entered a match"
+      );
+
+      req.session.user = {
+        id: freshUser.id,
+        username: freshUser.username,
+        credits: wallet
+      };
       req.session.gameEntryReady = false;
-      req.session.save(() => {});
 
-      socket.emit("chatHistory", chatMessages);
-      socket.emit("joined", { ok: true, id: socket.id });
+      req.session.save((saveErr) => {
+        if (saveErr) {
+          console.error("SESSION SAVE ERROR AFTER JOIN:", saveErr);
+          socket.emit("joinError", { error: "Failed to save session." });
+          return;
+        }
 
-      addChatMessage("SERVER", `${player.name} joined the game`);
+        const player = createHumanPlayer(socket.id, {
+          id: freshUser.id,
+          username: freshUser.username
+        }, payload);
+
+        players.set(socket.id, player);
+        playerByUserId.set(freshUser.id, socket.id);
+
+        socket.emit("chatHistory", chatMessages);
+        socket.emit("joined", {
+          ok: true,
+          wallet
+        });
+
+        addChatMessage("SERVER", `${player.name} joined the game`);
+      });
     } catch (err) {
       console.error("JOIN ERROR:", err);
+
+      if (err.code === "INSUFFICIENT_CREDITS") {
+        socket.emit("joinError", { error: "Not enough balance to play." });
+        return;
+      }
+
       socket.emit("joinError", { error: "Failed to join the match." });
     }
   });
+});
 
   socket.on("chat", (text) => {
     const player = players.get(socket.id);
@@ -1152,3 +1196,4 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
   console.log(`Using database: ${DB_PATH}`);
 });
+
