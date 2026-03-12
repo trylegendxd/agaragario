@@ -1,4 +1,7 @@
-const socket = io();
+const socket = io({
+  autoConnect: false,
+  withCredentials: true
+});
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
@@ -75,6 +78,48 @@ function radiusFromMass(mass) {
 
 function lerp(a, b, t) {
   return a + (b - a) * t;
+}
+
+function waitForSocketConnect(timeoutMs = 4000) {
+  return new Promise((resolve, reject) => {
+    if (socket.connected) {
+      resolve();
+      return;
+    }
+
+    const onConnect = () => {
+      cleanup();
+      resolve();
+    };
+
+    const onError = (err) => {
+      cleanup();
+      reject(err || new Error("Socket connection failed."));
+    };
+
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("Socket connection timeout."));
+    }, timeoutMs);
+
+    function cleanup() {
+      clearTimeout(timer);
+      socket.off("connect", onConnect);
+      socket.off("connect_error", onError);
+    }
+
+    socket.on("connect", onConnect);
+    socket.on("connect_error", onError);
+    socket.connect();
+  });
+}
+
+async function reconnectSocketAfterAuth() {
+  if (socket.connected) {
+    socket.disconnect();
+  }
+
+  await waitForSocketConnect();
 }
 
 function escapeHtml(text) {
@@ -237,9 +282,18 @@ async function checkSession() {
   try {
     const data = await api("/api/me");
     updateAuthUi(data.user || null);
+
+    if (data.user) {
+      await reconnectSocketAfterAuth();
+    } else if (!socket.connected) {
+      socket.connect();
+    }
   } catch (err) {
     console.error("SESSION CHECK ERROR:", err);
     setAuthStatus("Failed to check session.", true);
+    if (!socket.connected) {
+      socket.connect();
+    }
   }
 }
 
@@ -649,6 +703,10 @@ async function joinGame() {
   setWalletStatus("");
 
   try {
+    if (!socket.connected) {
+      await reconnectSocketAfterAuth();
+    }
+
     const data = await api("/api/game/enter", {});
 
     if (data.error) {
@@ -784,6 +842,7 @@ registerBtn?.addEventListener("click", async () => {
       return;
     }
 
+    await reconnectSocketAfterAuth();
     updateAuthUi(data.user);
     setMenuStatus("Welcome bonus received: $5.00");
   } catch (err) {
@@ -803,6 +862,7 @@ loginBtn?.addEventListener("click", async () => {
       return;
     }
 
+    await reconnectSocketAfterAuth();
     updateAuthUi(data.user);
   } catch (err) {
     console.error("LOGIN ERROR:", err);
@@ -933,5 +993,6 @@ spawnMoneySigns(menuMoneyBg, 28);
 checkSession();
 loop();
 setPlayButtonState(false);
+
 
 
