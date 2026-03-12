@@ -186,3 +186,133 @@ canvas {
   outline: none;
   background: #fff;
 }
+
+.landingScreen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at center, #f7fff5, #e7f6e4);
+  overflow: hidden;
+  z-index: 30;
+}
+
+.landingPanel {
+  position: relative;
+  z-index: 2;
+  width: 420px;
+  background: rgba(255,255,255,0.92);
+  border: 1px solid #d8e7d2;
+  border-radius: 14px;
+  padding: 28px;
+  text-align: center;
+  box-shadow: 0 10px 32px rgba(0,0,0,0.12);
+}
+
+.landingPanel h1,
+.gameMenuPanel h1 {
+  margin: 0 0 12px;
+  font-size: 62px;
+  line-height: 1;
+  font-weight: 900;
+  letter-spacing: 2px;
+  background: linear-gradient(180deg, #7dff6b, #1fa800);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 18px rgba(60,255,60,0.28);
+}
+
+.landingPanel p,
+.gameMenuPanel p {
+  color: #666;
+  font-size: 15px;
+  margin-bottom: 16px;
+}
+
+#startMenuBtn,
+#playBtn {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  font-size: 18px;
+  border-radius: 6px;
+  margin-top: 12px;
+  border: 1px solid #3a9f24;
+  background: linear-gradient(#62e64f, #43be2f);
+  color: white;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.moneyBg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.moneySign {
+  position: absolute;
+  color: rgba(35, 180, 35, 0.18);
+  font-weight: 900;
+  font-family: Arial, sans-serif;
+  animation: floatMoney linear infinite;
+  user-select: none;
+}
+
+@keyframes floatMoney {
+  from {
+    transform: translateY(110vh) rotate(0deg);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  to {
+    transform: translateY(-20vh) rotate(20deg);
+    opacity: 0;
+  }
+}
+
+.gameMenuPanel {
+  position: relative;
+  z-index: 2;
+  width: 420px;
+  background: rgba(255,255,255,0.94);
+  border: 1px solid #d9d9d9;
+  border-radius: 12px;
+  padding: 24px;
+  text-align: center;
+  box-shadow: 0 12px 38px rgba(0,0,0,0.14);
+}
+
+.colorRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.colorRow label {
+  color: #555;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+#colorInput {
+  width: 58px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
