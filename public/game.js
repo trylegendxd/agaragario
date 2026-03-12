@@ -3,6 +3,12 @@ const socket = io();
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
+const landingScreen = document.getElementById("landingScreen");
+const startMenuBtn = document.getElementById("startMenuBtn");
+const colorInput = document.getElementById("colorInput");
+const moneyBg = document.getElementById("moneyBg");
+const menuMoneyBg = document.getElementById("menuMoneyBg");
+
 const menu = document.getElementById("menu");
 const playBtn = document.getElementById("playBtn");
 const nameInput = document.getElementById("nameInput");
@@ -96,6 +102,23 @@ function setChatOpen(open) {
     setTimeout(() => chatInput.focus(), 0);
   } else if (chatInput) {
     chatInput.blur();
+  }
+}
+
+function spawnMoneySigns(container, count) {
+  if (!container) return;
+
+  container.innerHTML = "";
+
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement("div");
+    el.className = "moneySign";
+    el.textContent = "$";
+    el.style.left = Math.random() * 100 + "%";
+    el.style.fontSize = 18 + Math.random() * 42 + "px";
+    el.style.animationDuration = 7 + Math.random() * 8 + "s";
+    el.style.animationDelay = Math.random() * 8 + "s";
+    container.appendChild(el);
   }
 }
 
@@ -429,7 +452,12 @@ window.addEventListener("keydown", (e) => {
 });
 
 function joinGame() {
-  socket.emit("join", nameInput.value.trim() || "Player");
+  socket.emit("join", {
+    name: nameInput.value.trim() || "Player",
+    color: colorInput ? colorInput.value : "#33c3ff"
+  });
+
+  if (landingScreen) landingScreen.style.display = "none";
   menu.style.display = "none";
   setChatOpen(false);
 }
@@ -441,6 +469,13 @@ nameInput.addEventListener("keydown", (e) => {
     joinGame();
   }
 });
+
+if (startMenuBtn) {
+  startMenuBtn.addEventListener("click", () => {
+    if (landingScreen) landingScreen.style.display = "none";
+    menu.style.display = "flex";
+  });
+}
 
 if (chatInput) {
   chatInput.addEventListener("keydown", (e) => {
@@ -525,4 +560,8 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
+spawnMoneySigns(moneyBg, 28);
+spawnMoneySigns(menuMoneyBg, 28);
+
 loop();
+
