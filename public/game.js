@@ -412,7 +412,7 @@ setInterval(() => {
 
   state.splitQueued = false;
   state.ejectQueued = false;
-}, 1000 / 30);
+}, 1000 / 60);
 
 function loop() {
   const interpolated = getInterpolatedState();
@@ -431,4 +431,5 @@ function loop() {
 }
 
 loop();
+
 
