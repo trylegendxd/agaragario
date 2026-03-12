@@ -1,961 +1,451 @@
-const path = require("path");
-const fs = require("fs");
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
-const session = require("express-session");
-const Database = require("better-sqlite3");
-const bcrypt = require("bcryptjs");
-
-const app = express();
-app.set("trust proxy", 1);
-
-const server = http.createServer(app);
-const io = new Server(server, {
-  transports: ["websocket", "polling"]
-});
-
-const DEFAULT_DATA_DIR = fs.existsSync("/var/data") ? "/var/data" : __dirname;
-const DATA_DIR = process.env.DATA_DIR || DEFAULT_DATA_DIR;
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "pipo.db");
-const db = new Database(DB_PATH);
-db.pragma("journal_mode = WAL");
-db.pragma("synchronous = NORMAL");
-db.pragma("busy_timeout = 5000");
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    credits REAL NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  )
-`);
-
-try {
-  db.exec(`ALTER TABLE users ADD COLUMN credits REAL NOT NULL DEFAULT 0`);
-} catch (err) {
-  if (!String(err.message || "").includes("duplicate column name")) throw err;
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: Ubuntu, Arial, sans-serif;
+  background: #ffffff;
 }
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS credit_transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    kind TEXT NOT NULL,
-    amount_eur REAL NOT NULL DEFAULT 0,
-    credits_delta REAL NOT NULL DEFAULT 0,
-    currency TEXT,
-    tx_reference TEXT,
-    status TEXT NOT NULL DEFAULT 'completed',
-    metadata_json TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-  )
-`);
+canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  background: #ffffff;
+  cursor: crosshair;
+}
 
-const sessionMiddleware = session({
-  secret: process.env.SESSION_SECRET || "change-this-secret-in-production",
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production"
+.menu {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.panel {
+  width: 350px;
+  background: #fff;
+  border: 1px solid #d7d7d7;
+  border-radius: 6px;
+  padding: 18px;
+  text-align: center;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.12);
+}
+
+.panel h1 {
+  margin: 0 0 10px;
+  font-size: 46px;
+  color: #333;
+}
+
+.panel p {
+  margin: 0 0 12px;
+  color: #777;
+  font-size: 14px;
+}
+
+.panel input,
+.panel button {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 12px;
+  font-size: 16px;
+  border-radius: 4px;
+  margin-top: 10px;
+  font-family: inherit;
+}
+
+.panel input {
+  border: 1px solid #ccc;
+  outline: none;
+}
+
+.panel button {
+  border: 1px solid #3a9f24;
+  background: linear-gradient(#5fda4c, #46c734);
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.smallInfo {
+  margin-top: 10px;
+  color: #999;
+  font-size: 12px;
+}
+
+.hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+.massBox {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  min-width: 88px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #d5d5d5;
+  border-radius: 4px;
+  padding: 8px 10px 6px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.08);
+}
+
+.massLabel {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.massValue {
+  font-size: 38px;
+  line-height: 1;
+  font-weight: 700;
+  color: #555;
+}
+
+.leaderboard {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  width: 220px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid #d3d3d3;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.leaderboardTitle {
+  background: #f3f3f3;
+  border-bottom: 1px solid #ddd;
+  padding: 8px 10px;
+  font-size: 28px;
+  font-weight: 700;
+  color: #555;
+  text-align: center;
+}
+
+.leaderboardEntries {
+  padding: 8px 12px 10px;
+  color: #444;
+  font-size: 14px;
+}
+
+.leaderboardEntries div {
+  margin: 4px 0;
+}
+
+.chatBox {
+  position: fixed;
+  left: 16px;
+  bottom: 90px;
+  width: 320px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #d5d5d5;
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  display: none;
+  z-index: 20;
+}
+
+.chatMessages {
+  height: 180px;
+  overflow-y: auto;
+  padding: 10px;
+  font-size: 13px;
+  color: #333;
+  background: rgba(250, 250, 250, 0.96);
+}
+
+.chatMessage {
+  margin-bottom: 6px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.chatName {
+  font-weight: 700;
+  color: #2f7edb;
+  margin-right: 6px;
+}
+
+.chatInput {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  border-top: 1px solid #ddd;
+  padding: 10px 12px;
+  font-size: 14px;
+  outline: none;
+  background: #fff;
+}
+
+.landingScreen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at center, #f7fff5, #e7f6e4);
+  overflow: hidden;
+  z-index: 30;
+}
+
+.landingPanel {
+  position: relative;
+  z-index: 2;
+  width: 420px;
+  background: rgba(255,255,255,0.92);
+  border: 1px solid #d8e7d2;
+  border-radius: 14px;
+  padding: 28px;
+  text-align: center;
+  box-shadow: 0 10px 32px rgba(0,0,0,0.12);
+}
+
+.landingPanel h1,
+.gameMenuPanel h1 {
+  margin: 0 0 12px;
+  font-size: 62px;
+  line-height: 1;
+  font-weight: 900;
+  letter-spacing: 2px;
+  background: linear-gradient(180deg, #7dff6b, #1fa800);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 18px rgba(60,255,60,0.28);
+}
+
+.landingPanel p,
+.gameMenuPanel p {
+  color: #666;
+  font-size: 15px;
+  margin-bottom: 16px;
+}
+
+#startMenuBtn,
+#playBtn,
+#registerBtn,
+#loginBtn,
+#logoutBtn {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  font-size: 18px;
+  border-radius: 6px;
+  margin-top: 12px;
+  border: 1px solid #3a9f24;
+  background: linear-gradient(#62e64f, #43be2f);
+  color: white;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.moneyBg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.moneySign {
+  position: absolute;
+  color: rgba(35, 180, 35, 0.18);
+  font-weight: 900;
+  font-family: Arial, sans-serif;
+  animation: floatMoney linear infinite;
+  user-select: none;
+}
+
+@keyframes floatMoney {
+  from {
+    transform: translateY(110vh) rotate(0deg);
+    opacity: 0;
   }
-});
-
-const PORT = process.env.PORT || 3000;
-const SOLANA_RECEIVE_ADDRESS = process.env.SOLANA_RECEIVE_ADDRESS || "";
-const EUR_TO_CREDITS = 1;
-
-app.use(express.json());
-app.use(sessionMiddleware);
-
-const PUBLIC_DIR = path.join(__dirname, "public");
-const STATIC_DIR = fs.existsSync(PUBLIC_DIR) ? PUBLIC_DIR : __dirname;
-app.use(express.static(STATIC_DIR));
-app.get("/", (req, res) => {
-  res.sendFile(path.join(STATIC_DIR, "index.html"));
-});
-
-const WORLD_SIZE = 12000;
-const FOOD_COUNT = 3000;
-const VIRUS_COUNT = 35;
-const TICK_RATE = 45;
-const MAX_CELLS = 16;
-const SNAPSHOT_PADDING = 650;
-const FOOD_NEAR_CHECK = 160;
-const FOOD_NEAR_CHECK_SQ = FOOD_NEAR_CHECK * FOOD_NEAR_CHECK;
-const BOT_COUNT = 8;
-const BOT_VIEW_RADIUS = 2600;
-const BOT_NAMES = ["PIX", "MINT", "NOVA", "BLOB", "RIFT", "BYTE", "ZING", "GLOW"];
-
-const players = new Map();
-const bots = new Map();
-const food = [];
-const viruses = [];
-
-const chatMessages = [];
-const MAX_CHAT_MESSAGES = 40;
-
-function rand(min, max) {
-  return Math.random() * (max - min) + min;
-}
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function distanceSq(ax, ay, bx, by) {
-  const dx = ax - bx;
-  const dy = ay - by;
-  return dx * dx + dy * dy;
-}
-
-function radiusFromMass(mass) {
-  return Math.sqrt(mass) * 4.8;
-}
-
-function randomColor() {
-  const hue = Math.floor(rand(0, 360));
-  return `hsl(${hue}, 80%, 58%)`;
-}
-
-function createFood() {
-  return {
-    id: Math.random().toString(36).slice(2),
-    x: rand(-WORLD_SIZE / 2, WORLD_SIZE / 2),
-    y: rand(-WORLD_SIZE / 2, WORLD_SIZE / 2),
-    r: 8,
-    color: `hsl(${Math.floor(rand(0, 360))},85%,60%)`,
-    mass: 1
-  };
-}
-
-function createVirus() {
-  return {
-    id: Math.random().toString(36).slice(2),
-    x: rand(-WORLD_SIZE / 2, WORLD_SIZE / 2),
-    y: rand(-WORLD_SIZE / 2, WORLD_SIZE / 2),
-    r: 48
-  };
-}
-
-function totalMass(player) {
-  return player.cells.reduce((sum, c) => sum + c.mass, 0);
-}
-
-function playerCenter(player) {
-  let total = 0;
-  let sx = 0;
-  let sy = 0;
-
-  for (const cell of player.cells) {
-    total += cell.mass;
-    sx += cell.x * cell.mass;
-    sy += cell.y * cell.mass;
+  10% {
+    opacity: 1;
   }
-
-  if (total <= 0) return { x: 0, y: 0 };
-  return { x: sx / total, y: sy / total };
-}
-
-function respawnCell() {
-  const pad = WORLD_SIZE / 2 - 220;
-  return {
-    x: rand(-pad, pad),
-    y: rand(-pad, pad),
-    mass: 30,
-    vx: 0,
-    vy: 0,
-    mergeTimer: 0
-  };
-}
-
-function createPlayer(id, name, account = null) {
-  return {
-    id,
-    userId: account?.id || null,
-    username: account?.username || null,
-    name: (name || account?.username || "Player").slice(0, 16),
-    color: randomColor(),
-    mouse: { x: 0, y: 0 },
-    wantsSplit: false,
-    wantsEject: false,
-    isBot: false,
-    cells: [respawnCell()]
-  };
-}
-
-function createBot(id, name) {
-  return {
-    id,
-    userId: null,
-    username: null,
-    name: String(name || "Bot").slice(0, 16),
-    color: randomColor(),
-    mouse: { x: rand(-500, 500), y: rand(-500, 500) },
-    wantsSplit: false,
-    wantsEject: false,
-    isBot: true,
-    roamTimer: 0,
-    roamAngle: rand(0, Math.PI * 2),
-    cells: [respawnCell()]
-  };
-}
-
-function getAllEntities() {
-  return [...players.values(), ...bots.values()];
-}
-
-function respawnBot(bot) {
-  bot.color = randomColor();
-  bot.cells = [respawnCell()];
-  bot.mouse.x = rand(-500, 500);
-  bot.mouse.y = rand(-500, 500);
-  bot.wantsSplit = false;
-  bot.wantsEject = false;
-  bot.roamTimer = 0;
-}
-
-function ensureBots() {
-  while (bots.size < BOT_COUNT) {
-    const index = bots.size;
-    const id = `bot-${index + 1}`;
-    const name = `${BOT_NAMES[index % BOT_NAMES.length]}-${index + 1}`;
-    bots.set(id, createBot(id, name));
+  90% {
+    opacity: 1;
   }
-}
-
-function updateBotAi(bot) {
-  const center = playerCenter(bot);
-  const myMass = totalMass(bot);
-  let fleeX = 0;
-  let fleeY = 0;
-  let fleePower = 0;
-  let chaseTarget = null;
-  let chaseDistSq = Infinity;
-
-  for (const player of players.values()) {
-    const pCenter = playerCenter(player);
-    const dx = center.x - pCenter.x;
-    const dy = center.y - pCenter.y;
-    const dSq = dx * dx + dy * dy + 1;
-    if (dSq > BOT_VIEW_RADIUS * BOT_VIEW_RADIUS) continue;
-    const weight = (BOT_VIEW_RADIUS * BOT_VIEW_RADIUS) / dSq;
-    fleeX += dx * weight;
-    fleeY += dy * weight;
-    fleePower += weight;
-  }
-
-  for (const other of bots.values()) {
-    if (other.id === bot.id) continue;
-    const otherCenter = playerCenter(other);
-    const dx = center.x - otherCenter.x;
-    const dy = center.y - otherCenter.y;
-    const dSq = dx * dx + dy * dy + 1;
-    if (dSq > BOT_VIEW_RADIUS * BOT_VIEW_RADIUS) continue;
-
-    const otherMass = totalMass(other);
-    if (myMass > otherMass * 1.18) {
-      if (dSq < chaseDistSq) {
-        chaseDistSq = dSq;
-        chaseTarget = otherCenter;
-      }
-    } else {
-      const weight = (BOT_VIEW_RADIUS * BOT_VIEW_RADIUS) / dSq;
-      fleeX += dx * weight;
-      fleeY += dy * weight;
-      fleePower += weight;
-    }
-  }
-
-  if (fleePower > 0.12) {
-    bot.mouse.x = fleeX;
-    bot.mouse.y = fleeY;
-    bot.wantsSplit = false;
-    return;
-  }
-
-  if (chaseTarget) {
-    bot.mouse.x = chaseTarget.x - center.x;
-    bot.mouse.y = chaseTarget.y - center.y;
-    if (myMass > 70 && chaseDistSq < 420 * 420 && bot.cells.length < MAX_CELLS) {
-      bot.wantsSplit = true;
-    }
-    return;
-  }
-
-  if (bot.roamTimer <= 0) {
-    bot.roamTimer = 40 + Math.floor(rand(0, 90));
-    bot.roamAngle = rand(0, Math.PI * 2);
-  } else {
-    bot.roamTimer--;
-  }
-
-  bot.mouse.x = Math.cos(bot.roamAngle) * 320;
-  bot.mouse.y = Math.sin(bot.roamAngle) * 320;
-}
-
-function addChatMessage(name, text) {
-  const cleanName = String(name || "Player").slice(0, 16);
-  const cleanText = String(text || "").trim().slice(0, 160);
-
-  if (!cleanText) return;
-
-  const msg = {
-    id: Math.random().toString(36).slice(2),
-    name: cleanName,
-    text: cleanText,
-    time: Date.now()
-  };
-
-  chatMessages.push(msg);
-
-  while (chatMessages.length > MAX_CHAT_MESSAGES) {
-    chatMessages.shift();
-  }
-
-  io.sockets.emit("chat", msg);
-}
-
-function resetWorldObjects() {
-  food.length = 0;
-  viruses.length = 0;
-
-  for (let i = 0; i < FOOD_COUNT; i++) {
-    food.push(createFood());
-  }
-
-  for (let i = 0; i < VIRUS_COUNT; i++) {
-    viruses.push(createVirus());
+  to {
+    transform: translateY(-20vh) rotate(20deg);
+    opacity: 0;
   }
 }
 
-function movePlayer(player) {
-  for (const cell of player.cells) {
-    const speed = 3.1 / Math.pow(cell.mass, 0.16);
-    const len = Math.hypot(player.mouse.x, player.mouse.y) || 1;
-    const dirX = player.mouse.x / len;
-    const dirY = player.mouse.y / len;
-    const distFactor = Math.min(len / 180, 1);
-
-    cell.vx += dirX * speed * distFactor;
-    cell.vy += dirY * speed * distFactor;
-
-    cell.vx *= 0.84;
-    cell.vy *= 0.84;
-
-    cell.x += cell.vx;
-    cell.y += cell.vy;
-
-    if (cell.mergeTimer > 0) cell.mergeTimer--;
-  }
-
-  for (let i = 0; i < player.cells.length; i++) {
-    for (let j = i + 1; j < player.cells.length; j++) {
-      const a = player.cells[i];
-      const b = player.cells[j];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const d = Math.hypot(dx, dy) || 1;
-      const minD = (radiusFromMass(a.mass) + radiusFromMass(b.mass)) * 0.55;
-
-      if (d < minD) {
-        const push = (minD - d) * 0.1;
-        a.x -= (dx / d) * push;
-        a.y -= (dy / d) * push;
-        b.x += (dx / d) * push;
-        b.y += (dy / d) * push;
-      }
-    }
-  }
-
-  for (const cell of player.cells) {
-    const r = radiusFromMass(cell.mass);
-    const bound = WORLD_SIZE / 2 - r;
-    cell.x = clamp(cell.x, -bound, bound);
-    cell.y = clamp(cell.y, -bound, bound);
-  }
+.gameMenuPanel {
+  position: relative;
+  z-index: 2;
+  width: 420px;
+  background: rgba(255,255,255,0.94);
+  border: 1px solid #d9d9d9;
+  border-radius: 12px;
+  padding: 24px;
+  text-align: center;
+  box-shadow: 0 12px 38px rgba(0,0,0,0.14);
 }
 
-function splitPlayer(player) {
-  if (!player.wantsSplit) return;
-  player.wantsSplit = false;
-
-  if (player.cells.length >= MAX_CELLS) return;
-
-  const len = Math.hypot(player.mouse.x, player.mouse.y) || 1;
-  const dirX = player.mouse.x / len;
-  const dirY = player.mouse.y / len;
-
-  const newCells = [];
-
-  for (const cell of player.cells) {
-    if (cell.mass < 36) continue;
-    if (player.cells.length + newCells.length >= MAX_CELLS) break;
-
-    const childMass = cell.mass / 2;
-    cell.mass = childMass;
-    const r = radiusFromMass(childMass);
-
-    newCells.push({
-      x: cell.x + dirX * (r * 2.2),
-      y: cell.y + dirY * (r * 2.2),
-      mass: childMass,
-      vx: dirX * 24,
-      vy: dirY * 24,
-      mergeTimer: 220
-    });
-
-    cell.mergeTimer = 220;
-  }
-
-  player.cells.push(...newCells);
+.colorRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
 }
 
-function ejectMass(player) {
-  if (!player.wantsEject) return;
-  player.wantsEject = false;
-
-  const len = Math.hypot(player.mouse.x, player.mouse.y) || 1;
-  const dirX = player.mouse.x / len;
-  const dirY = player.mouse.y / len;
-
-  for (const cell of player.cells) {
-    if (cell.mass <= 20) continue;
-    cell.mass -= 1;
-
-    food.push({
-      id: Math.random().toString(36).slice(2),
-      x: cell.x + dirX * (radiusFromMass(cell.mass) + 20),
-      y: cell.y + dirY * (radiusFromMass(cell.mass) + 20),
-      r: 8,
-      color: "#33c3ff",
-      mass: 1
-    });
-  }
+.colorRow label {
+  color: #555;
+  font-size: 15px;
+  font-weight: 600;
 }
 
-function removeFoodAt(index) {
-  const last = food.length - 1;
-  if (index !== last) {
-    food[index] = food[last];
-  }
-  food.pop();
+#colorInput {
+  width: 58px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
 
-function handleFoodEating(player) {
-  for (const cell of player.cells) {
-    const r = radiusFromMass(cell.mass);
-    const eatRadiusSq = (r + 8) * (r + 8);
-
-    for (let i = food.length - 1; i >= 0; i--) {
-      const f = food[i];
-      const dx = cell.x - f.x;
-      if (dx > FOOD_NEAR_CHECK || dx < -FOOD_NEAR_CHECK) continue;
-      const dy = cell.y - f.y;
-      if (dy > FOOD_NEAR_CHECK || dy < -FOOD_NEAR_CHECK) continue;
-      const dsq = dx * dx + dy * dy;
-      if (dsq > FOOD_NEAR_CHECK_SQ) continue;
-
-      if (dsq < eatRadiusSq) {
-        cell.mass += f.mass;
-        removeFoodAt(i);
-      }
-    }
-  }
-
-  while (food.length < FOOD_COUNT) {
-    food.push(createFood());
-  }
+.authPanel {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 320px;
+  background: rgba(255,255,255,0.96);
+  border: 1px solid #ddd;
+  border-radius: 12px;
+  padding: 18px;
+  z-index: 60;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.14);
+  text-align: center;
 }
 
-function splitByVirus(player, cellIndex, virusIndex) {
-  const cell = player.cells[cellIndex];
-  if (!cell) return;
-  if (player.cells.length >= MAX_CELLS) return;
-
-  const piecesWanted = Math.min(
-    MAX_CELLS - player.cells.length + 1,
-    Math.max(2, Math.min(8, Math.floor(cell.mass / 18)))
-  );
-
-  if (piecesWanted < 2) return;
-
-  const partMass = cell.mass / piecesWanted;
-  cell.mass = partMass;
-  cell.mergeTimer = 300;
-
-  for (let i = 1; i < piecesWanted; i++) {
-    const ang = (Math.PI * 2 * i) / piecesWanted;
-    player.cells.push({
-      x: cell.x + Math.cos(ang) * 20,
-      y: cell.y + Math.sin(ang) * 20,
-      mass: partMass,
-      vx: Math.cos(ang) * 18,
-      vy: Math.sin(ang) * 18,
-      mergeTimer: 300
-    });
-  }
-
-  viruses.splice(virusIndex, 1);
-  viruses.push(createVirus());
+.authPanel h2 {
+  margin: 0 0 10px;
+  font-size: 24px;
+  color: #333;
 }
 
-function handleVirusCollisions(player) {
-  for (let v = viruses.length - 1; v >= 0; v--) {
-    const virus = viruses[v];
-
-    for (let c = player.cells.length - 1; c >= 0; c--) {
-      const cell = player.cells[c];
-      const r = radiusFromMass(cell.mass);
-
-      if (cell.mass >= 36 && distanceSq(cell.x, cell.y, virus.x, virus.y) < (r - virus.r * 0.15) ** 2) {
-        splitByVirus(player, c, v);
-        break;
-      }
-    }
-  }
+.authPanel input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
 }
 
-function handlePlayerVsPlayer() {
-  const all = getAllEntities();
-
-  for (let i = 0; i < all.length; i++) {
-    for (let j = i + 1; j < all.length; j++) {
-      const A = all[i];
-      const B = all[j];
-
-      for (const a of [...A.cells]) {
-        for (const b of [...B.cells]) {
-          const rA = radiusFromMass(a.mass);
-          const rB = radiusFromMass(b.mass);
-          const bigger = a.mass > b.mass * 1.15 ? a : b.mass > a.mass * 1.15 ? b : null;
-          const smaller = bigger === a ? b : bigger === b ? a : null;
-          if (!bigger || !smaller) continue;
-
-          const dSq = distanceSq(a.x, a.y, b.x, b.y);
-          const minEat = Math.max(rA, rB) * 0.9;
-
-          if (dSq < minEat * minEat) {
-            bigger.mass += smaller.mass;
-
-            if (smaller === a) {
-              A.cells = A.cells.filter((c) => c !== a);
-              if (!A.cells.length) {
-                if (A.isBot) respawnBot(A);
-                else A.cells = [respawnCell()];
-              }
-            } else {
-              B.cells = B.cells.filter((c) => c !== b);
-              if (!B.cells.length) {
-                if (B.isBot) respawnBot(B);
-                else B.cells = [respawnCell()];
-              }
-            }
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  ensureBots();
+.authButtons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
 }
 
-function handleSelfMerge(player) {
-  if (player.cells.length <= 1) return;
-
-  for (let i = 0; i < player.cells.length; i++) {
-    for (let j = i + 1; j < player.cells.length; j++) {
-      const a = player.cells[i];
-      const b = player.cells[j];
-      const limit = Math.max(radiusFromMass(a.mass), radiusFromMass(b.mass)) * 0.6;
-
-      if (a.mergeTimer <= 0 && b.mergeTimer <= 0 && distanceSq(a.x, a.y, b.x, b.y) < limit * limit) {
-        a.mass += b.mass;
-        player.cells.splice(j, 1);
-        j--;
-      }
-    }
-  }
+#logoutBtn {
+  grid-column: 1 / -1;
 }
 
-function buildLeaderboard() {
-  return getAllEntities()
-    .map((p) => ({
-      name: p.name,
-      mass: Math.round(totalMass(p))
-    }))
-    .sort((a, b) => b.mass - a.mass)
-    .slice(0, 10);
+#authStatus {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #555;
+  min-height: 18px;
 }
 
-function buildSnapshotFor(targetPlayer) {
-  const center = playerCenter(targetPlayer);
-  const total = totalMass(targetPlayer);
-  const biggestCellMass = targetPlayer.cells.length
-    ? Math.max(...targetPlayer.cells.map((c) => c.mass))
-    : total;
 
-  const biggestRadius = radiusFromMass(biggestCellMass);
-  const visibleRadius = Math.max(1700, biggestRadius * 5.3 + SNAPSHOT_PADDING);
-
-  const visibleFood = [];
-  for (const f of food) {
-    if (Math.abs(f.x - center.x) > visibleRadius) continue;
-    if (Math.abs(f.y - center.y) > visibleRadius) continue;
-    visibleFood.push(f);
-  }
-
-  const visibleViruses = [];
-  for (const v of viruses) {
-    if (Math.abs(v.x - center.x) > visibleRadius) continue;
-    if (Math.abs(v.y - center.y) > visibleRadius) continue;
-    visibleViruses.push(v);
-  }
-
-  const visiblePlayers = [];
-  for (const p of players.values()) {
-    const pCenter = playerCenter(p);
-
-    if (
-      p.id !== targetPlayer.id &&
-      Math.abs(pCenter.x - center.x) > visibleRadius &&
-      Math.abs(pCenter.y - center.y) > visibleRadius
-    ) {
-      continue;
-    }
-
-    visiblePlayers.push({
-      id: p.id,
-      name: p.name,
-      color: p.color,
-      totalMass: Math.round(totalMass(p)),
-      cells: p.cells.map((c) => ({
-        x: Math.round(c.x * 10) / 10,
-        y: Math.round(c.y * 10) / 10,
-        mass: Math.round(c.mass * 10) / 10
-      }))
-    });
-  }
-
-  visiblePlayers.sort((a, b) => a.totalMass - b.totalMass);
-
-  return {
-    worldSize: WORLD_SIZE,
-    food: visibleFood,
-    viruses: visibleViruses,
-    players: visiblePlayers,
-    leaderboard: buildLeaderboard(),
-    debugPlayerCount: players.size,
-    debugBotCount: bots.size
-  };
+.walletCard {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #d7ead2;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(245,255,242,0.98), rgba(236,251,232,0.98));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 8px 22px rgba(54, 130, 44, 0.08);
+  text-align: left;
 }
 
-function getSessionUser(req) {
-  return req.session.user || null;
+.walletHeader {
+  font-size: 20px;
+  font-weight: 800;
+  color: #27751f;
+  margin-bottom: 10px;
 }
 
-function getFreshSessionUser(req) {
-  const sessionUser = getSessionUser(req);
-  if (!sessionUser?.id) return null;
-
-  const user = db.prepare("SELECT id, username, credits FROM users WHERE id = ?").get(sessionUser.id);
-  if (!user) return null;
-
-  req.session.user = {
-    id: user.id,
-    username: user.username,
-    credits: Number(user.credits || 0)
-  };
-
-  return req.session.user;
+.walletBalanceRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.82);
+  border: 1px solid #dcebd8;
+  color: #4f5b4d;
+  font-weight: 700;
 }
 
-function requireAuth(req, res, next) {
-  const user = getFreshSessionUser(req);
-  if (!user) {
-    return res.status(401).json({ error: "You must be logged in." });
-  }
-  req.user = user;
-  next();
+#walletValue {
+  font-size: 28px;
+  color: #1f8b28;
 }
 
-const addCreditsStmt = db.prepare(`
-  UPDATE users
-  SET credits = ROUND(credits + ?, 2)
-  WHERE id = ?
-`);
+.walletCard input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid #cfe0cb;
+  border-radius: 10px;
+  font-size: 14px;
+  background: rgba(255,255,255,0.96);
+}
 
-const insertCreditTxStmt = db.prepare(`
-  INSERT INTO credit_transactions
-    (user_id, kind, amount_eur, credits_delta, currency, tx_reference, status, metadata_json)
-  VALUES
-    (?, ?, ?, ?, ?, ?, ?, ?)
-`);
+.walletButtons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
 
-const getUserCreditsStmt = db.prepare("SELECT credits FROM users WHERE id = ?");
+.walletButtons button {
+  margin-top: 0;
+}
 
-const applyCreditChange = db.transaction((userId, creditsDelta, details = {}) => {
-  addCreditsStmt.run(creditsDelta, userId);
-  insertCreditTxStmt.run(
-    userId,
-    details.kind || "manual",
-    Number(details.amountEur || 0),
-    Number(creditsDelta || 0),
-    details.currency || null,
-    details.txReference || null,
-    details.status || "completed",
-    details.metadata ? JSON.stringify(details.metadata) : null
-  );
-  const row = getUserCreditsStmt.get(userId);
-  return Number(row?.credits || 0);
-});
+.secondaryButton {
+  border: 1px solid #83ad7c !important;
+  background: linear-gradient(#ffffff, #edf8eb) !important;
+  color: #2d6b2f !important;
+}
 
-app.post("/api/register", async (req, res) => {
-  try {
-    const username = String(req.body?.username || "").trim();
-    const password = String(req.body?.password || "");
+.walletHint {
+  margin-top: 10px;
+  color: #6f7d6c;
+  font-size: 12px;
+  text-align: center;
+}
 
-    if (username.length < 3 || username.length > 20) {
-      return res.status(400).json({ error: "Username must be 3-20 characters." });
-    }
-
-    if (password.length < 6) {
-      return res.status(400).json({ error: "Password must be at least 6 characters." });
-    }
-
-    const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(username);
-    if (existing) {
-      return res.status(409).json({ error: "Username already exists." });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 12);
-    const result = db.prepare("INSERT INTO users (username, password_hash, credits) VALUES (?, ?, ?)").run(username, passwordHash, 0);
-
-    req.session.user = {
-      id: result.lastInsertRowid,
-      username,
-      credits: 0
-    };
-
-    res.json({ ok: true, user: getFreshSessionUser(req) });
-  } catch (err) {
-    console.error("REGISTER ERROR:", err);
-    res.status(500).json({ error: "Failed to register." });
-  }
-});
-
-app.post("/api/login", async (req, res) => {
-  try {
-    const username = String(req.body?.username || "").trim();
-    const password = String(req.body?.password || "");
-
-    const user = db.prepare("SELECT id, username, password_hash, credits FROM users WHERE username = ?").get(username);
-    if (!user) {
-      return res.status(401).json({ error: "Invalid username or password." });
-    }
-
-    const ok = await bcrypt.compare(password, user.password_hash);
-    if (!ok) {
-      return res.status(401).json({ error: "Invalid username or password." });
-    }
-
-    req.session.user = {
-      id: user.id,
-      username: user.username,
-      credits: Number(user.credits || 0)
-    };
-
-    res.json({ ok: true, user: getFreshSessionUser(req) });
-  } catch (err) {
-    console.error("LOGIN ERROR:", err);
-    res.status(500).json({ error: "Failed to log in." });
-  }
-});
-
-app.post("/api/logout", (req, res) => {
-  req.session.destroy(() => res.json({ ok: true }));
-});
-
-app.get("/api/me", (req, res) => {
-  res.json({ user: getFreshSessionUser(req) });
-});
-
-app.get("/api/balance", requireAuth, (req, res) => {
-  res.json({ ok: true, credits: req.user.credits });
-});
-
-app.get("/api/credits/history", requireAuth, (req, res) => {
-  const rows = db.prepare(`SELECT id, kind, amount_eur, credits_delta, currency, tx_reference, status, created_at FROM credit_transactions WHERE user_id = ? ORDER BY id DESC LIMIT 50`).all(req.user.id);
-  res.json({ ok: true, history: rows });
-});
-
-app.post("/api/credits/add", requireAuth, (req, res) => {
-  const amountEur = Number(req.body?.amountEur);
-  if (!Number.isFinite(amountEur) || amountEur <= 0) {
-    return res.status(400).json({ error: "amountEur must be a positive number." });
-  }
-
-  const creditsToAdd = Math.round(amountEur * EUR_TO_CREDITS * 100) / 100;
-  const credits = applyCreditChange(req.user.id, creditsToAdd, {
-    kind: "manual_topup",
-    amountEur,
-    currency: "EUR",
-    txReference: String(req.body?.txReference || "") || null,
-    metadata: { source: "api_credits_add" }
-  });
-
-  req.session.user.credits = credits;
-  res.json({ ok: true, credits, addedCredits: creditsToAdd });
-});
-
-app.post("/api/credits/withdraw", requireAuth, (req, res) => {
-  const amountEur = Number(req.body?.amountEur ?? req.body?.credits);
-  const solanaAddress = String(req.body?.solanaAddress || "").trim();
-
-  if (!Number.isFinite(amountEur) || amountEur <= 0) {
-    return res.status(400).json({ error: "amountEur must be a positive number." });
-  }
-  if (solanaAddress.length < 20) {
-    return res.status(400).json({ error: "A valid Solana address is required." });
-  }
-
-  const roundedAmount = Math.round(amountEur * 100) / 100;
-  if (req.user.credits < roundedAmount) {
-    return res.status(400).json({ error: "Not enough wallet balance." });
-  }
-
-  const credits = applyCreditChange(req.user.id, -roundedAmount, {
-    kind: "withdrawal_request",
-    amountEur: roundedAmount,
-    currency: "SOL",
-    txReference: solanaAddress,
-    status: "pending_payout",
-    metadata: { solanaAddress, source: "api_credits_withdraw" }
-  });
-
-  req.session.user.credits = credits;
-  res.json({ ok: true, credits, requestedAmount: roundedAmount, status: "pending_payout" });
-});
-
-app.post("/api/payments/solana/quote", requireAuth, (req, res) => {
-  const amountEur = Number(req.body?.amountEur);
-  if (!Number.isFinite(amountEur) || amountEur <= 0) {
-    return res.status(400).json({ error: "amountEur must be a positive number." });
-  }
-
-  const roundedEur = Math.round(amountEur * 100) / 100;
-  const credits = Math.round(roundedEur * EUR_TO_CREDITS * 100) / 100;
-  const reference = `pipo-${req.user.id}-${Date.now()}`;
-
-  insertCreditTxStmt.run(req.user.id, "solana_quote", roundedEur, 0, "EUR", reference, "pending", JSON.stringify({ address: SOLANA_RECEIVE_ADDRESS || null, note: "Awaiting on-chain confirmation" }));
-
-  res.json({ ok: true, amountEur: roundedEur, credits, receiveAddress: SOLANA_RECEIVE_ADDRESS, reference, note: "Quote created. To credit balances automatically, add a Solana webhook/verification step." });
-});
-
-app.get("/debug/players", (req, res) => {
-  res.json({
-    playerCount: players.size,
-    botCount: bots.size,
-    players: [...players.values()].map((p) => ({
-      id: p.id,
-      name: p.name,
-      userId: p.userId,
-      totalMass: Math.round(totalMass(p)),
-      cells: p.cells.length
-    })),
-    chatMessages: chatMessages.length,
-    dbPath: DB_PATH,
-    dataDir: DATA_DIR
-  });
-});
-
-io.use((socket, next) => {
-  sessionMiddleware(socket.request, {}, next);
-});
-
-io.on("connection", (socket) => {
-  socket.on("join", (payload) => {
-    const sessionUser = getFreshSessionUser(socket.request);
-    const name = typeof payload === "string" ? payload : payload?.name;
-    const color = typeof payload === "object" ? payload?.color : null;
-
-    const player = createPlayer(socket.id, name, sessionUser);
-    if (color) player.color = color;
-
-    players.set(socket.id, player);
-
-    socket.emit("chatHistory", chatMessages);
-    addChatMessage("SERVER", `${player.name} joined the game`);
-  });
-
-  socket.on("chat", (text) => {
-    const player = players.get(socket.id);
-    if (!player) return;
-    addChatMessage(player.name, text);
-  });
-
-  socket.on("input", (input) => {
-    const player = players.get(socket.id);
-    if (!player) return;
-
-    if (typeof input.mouseX === "number") player.mouse.x = input.mouseX;
-    if (typeof input.mouseY === "number") player.mouse.y = input.mouseY;
-    if (input.split) player.wantsSplit = true;
-    if (input.eject) player.wantsEject = true;
-  });
-
-  socket.on("disconnect", () => {
-    const player = players.get(socket.id);
-    if (player) {
-      addChatMessage("SERVER", `${player.name} left the game`);
-    }
-    players.delete(socket.id);
-  });
-});
-
-resetWorldObjects();
-ensureBots();
-
-setInterval(() => {
-  try {
-    ensureBots();
-
-    for (const bot of bots.values()) {
-      updateBotAi(bot);
-    }
-
-    for (const entity of getAllEntities()) {
-      movePlayer(entity);
-      splitPlayer(entity);
-      ejectMass(entity);
-      handleFoodEating(entity);
-      handleVirusCollisions(entity);
-      handleSelfMerge(entity);
-    }
-
-    handlePlayerVsPlayer();
-
-    for (const [id, player] of players.entries()) {
-      const socket = io.sockets.sockets.get(id);
-      if (!socket) continue;
-      socket.volatile.emit("state", buildSnapshotFor(player));
-    }
-  } catch (err) {
-    console.error("GAME LOOP ERROR:", err);
-  }
-}, 1000 / TICK_RATE);
-
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on http://0.0.0.0:${PORT}`);
-  console.log(`Using database: ${DB_PATH}`);
-  console.log(`Using data directory: ${DATA_DIR}`);
-});
+.walletStatus {
+  min-height: 18px;
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #2e7d32;
+  text-align: center;
+}
