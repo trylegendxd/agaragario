@@ -35,29 +35,44 @@
   <div class="landingScreen" id="landingScreen">
     <div class="moneyBg" id="moneyBg"></div>
 
-    <div class="landingPanel">
+    <div class="landingPanel" id="startPanel">
       <h1>PIPO.IO</h1>
       <p>Grow bigger. Dominate the map.</p>
-      <button id="startMenuBtn">PLAY</button>
+      <button id="startMenuBtn" type="button">PLAY</button>
     </div>
 
-    <div class="authPanel" id="authPanel" style="display:none;">
+    <div class="authPanel hidden" id="authPanel">
       <h2>Account</h2>
-      <input id="authUsername" type="text" placeholder="Username" maxlength="20" />
-      <input id="authPassword" type="password" placeholder="Password" maxlength="64" />
+
+      <input
+        id="authUsername"
+        type="text"
+        placeholder="Username"
+        maxlength="20"
+        autocomplete="username"
+      />
+
+      <input
+        id="authPassword"
+        type="password"
+        placeholder="Password"
+        maxlength="64"
+        autocomplete="current-password"
+      />
 
       <div class="authButtons">
         <button id="registerBtn" type="button">Register</button>
         <button id="loginBtn" type="button">Login</button>
-        <button id="logoutBtn" type="button" style="display:none;">Logout</button>
+        <button id="logoutBtn" type="button" class="hidden">Logout</button>
       </div>
 
       <div id="authStatus"></div>
     </div>
   </div>
 
-  <div class="menu" id="menu" style="display:none;">
+  <div class="menu hidden" id="menu">
     <div class="moneyBg" id="menuMoneyBg"></div>
+
     <div class="panel gameMenuPanel">
       <h1>PIPO.IO</h1>
       <p>Choose your name and ball color, then enter the arena.</p>
@@ -68,6 +83,7 @@
         maxlength="16"
         placeholder="Nickname"
         value="Player"
+        autocomplete="off"
       />
 
       <div class="colorRow">
@@ -75,13 +91,10 @@
         <input id="colorInput" type="color" value="#33c3ff" />
       </div>
 
-      <div class="walletCard" id="walletCard">
-        <div class="walletHeader">Wallet</div>
-
-        <div class="walletBalanceRow">
-          <span>Wallet</span>
-          <strong id="walletValue">$0.00</strong>
-        </div>
+      <div class="walletPanel" id="walletPanel">
+        <div class="walletTitle">Wallet</div>
+        <div class="walletAmount" id="walletValue">$0.00</div>
+        <div class="walletSubtext">1 EUR = 1 wallet credit</div>
 
         <input
           id="walletAmountInput"
@@ -89,6 +102,7 @@
           min="0.01"
           step="0.01"
           placeholder="Amount in €"
+          autocomplete="off"
         />
 
         <input
@@ -96,22 +110,30 @@
           type="text"
           maxlength="80"
           placeholder="Solana wallet address for withdrawals"
+          autocomplete="off"
         />
 
-        <div class="walletButtons">
-          <button id="addBalanceBtn" type="button">Add Balance</button>
-          <button id="withdrawBtn" type="button" class="secondaryButton">Withdraw</button>
+        <div class="walletActions">
+          <button id="addBalanceBtn" type="button" class="walletBtn">
+            Add Balance
+          </button>
+          <button id="withdrawBtn" type="button" class="walletBtn secondary">
+            Withdraw
+          </button>
         </div>
 
-        <div class="walletHint">1 EUR = 1 wallet credit</div>
-        <div class="walletStatus" id="walletStatus"></div>
+        <div class="menuStatus" id="walletStatus"></div>
       </div>
 
-      <button id="playBtn">Enter Game</button>
+      <div class="menuDivider"></div>
+
+      <button id="playBtn" type="button">Enter Game</button>
 
       <div class="smallInfo">
         Move mouse to move · Space to split · W to eject mass · \ to chat
       </div>
+
+      <div class="menuStatus" id="menuStatus"></div>
     </div>
   </div>
 
