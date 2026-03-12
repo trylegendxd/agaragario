@@ -32,12 +32,38 @@
     />
   </div>
 
-  <div class="menu" id="menu">
-    <div class="panel">
+  <!-- Landing page -->
+  <div class="landingScreen" id="landingScreen">
+    <div class="moneyBg" id="moneyBg"></div>
+    <div class="landingPanel">
       <h1>PIPO.IO</h1>
-      <p>Enter your nickname and join the server.</p>
-      <input id="nameInput" type="text" maxlength="16" placeholder="Nickname" value="Player" />
-      <button id="playBtn">Play</button>
+      <p>Grow bigger. Dominate the map.</p>
+      <button id="startMenuBtn">PLAY</button>
+    </div>
+  </div>
+
+  <!-- Actual game menu -->
+  <div class="menu" id="menu" style="display:none;">
+    <div class="moneyBg" id="menuMoneyBg"></div>
+    <div class="panel gameMenuPanel">
+      <h1>PIPO.IO</h1>
+      <p>Choose your name and ball color, then enter the arena.</p>
+
+      <input
+        id="nameInput"
+        type="text"
+        maxlength="16"
+        placeholder="Nickname"
+        value="Player"
+      />
+
+      <div class="colorRow">
+        <label for="colorInput">Ball color</label>
+        <input id="colorInput" type="color" value="#33c3ff" />
+      </div>
+
+      <button id="playBtn">Enter Game</button>
+
       <div class="smallInfo">
         Move mouse to move · Space to split · W to eject mass · G to chat
       </div>
