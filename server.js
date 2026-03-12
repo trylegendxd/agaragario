@@ -642,26 +642,3 @@ setInterval(() => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
 });
-node:internal/modules/cjs/loader:1215
-  throw err;
-  ^
-
-Error: Cannot find module 'argon2'
-Require stack:
-- D:\PIPO\server.js
-    at Module._resolveFilename (node:internal/modules/cjs/loader:1212:15)
-    at Module._load (node:internal/modules/cjs/loader:1043:27)
-    at Module.require (node:internal/modules/cjs/loader:1298:19)
-    at require (node:internal/modules/helpers:182:18)
-    at Object.<anonymous> (D:\PIPO\server.js:6:16)
-    at Module._compile (node:internal/modules/cjs/loader:1529:14)
-    at Module._extensions..js (node:internal/modules/cjs/loader:1613:10)
-    at Module.load (node:internal/modules/cjs/loader:1275:32)
-    at Module._load (node:internal/modules/cjs/loader:1096:12)
-    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12) {
-  code: 'MODULE_NOT_FOUND',
-  requireStack: [ 'D:\\PIPO\\server.js' ]
-}
-
-Node.js v20.19.5 ნაწ
-
