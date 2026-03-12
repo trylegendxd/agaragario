@@ -9,6 +9,10 @@ const nameInput = document.getElementById("nameInput");
 const massValue = document.getElementById("massValue");
 const leaderboardEntries = document.getElementById("leaderboardEntries");
 
+const chatBox = document.getElementById("chatBox");
+const chatMessagesEl = document.getElementById("chatMessages");
+const chatInput = document.getElementById("chatInput");
+
 let W = (canvas.width = window.innerWidth);
 let H = (canvas.height = window.innerHeight);
 
@@ -37,12 +41,62 @@ const state = {
 const snapshots = [];
 const INTERPOLATION_DELAY = 20;
 
+let chatOpen = false;
+const chatMessages = [];
+
 function radiusFromMass(mass) {
   return Math.sqrt(mass) * 4.8;
 }
 
 function lerp(a, b, t) {
   return a + (b - a) * t;
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function renderChat() {
+  if (!chatMessagesEl) return;
+
+  chatMessagesEl.innerHTML = chatMessages
+    .map(
+      (msg) => `
+        <div class="chatMessage">
+          <span class="chatName">${escapeHtml(msg.name)}:</span>
+          <span>${escapeHtml(msg.text)}</span>
+        </div>
+      `
+    )
+    .join("");
+
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+}
+
+function pushChatMessage(msg) {
+  chatMessages.push(msg);
+  while (chatMessages.length > 40) {
+    chatMessages.shift();
+  }
+  renderChat();
+}
+
+function setChatOpen(open) {
+  chatOpen = open;
+  if (!chatBox) return;
+
+  chatBox.style.display = chatOpen ? "block" : "none";
+
+  if (chatOpen && chatInput) {
+    setTimeout(() => chatInput.focus(), 0);
+  } else if (chatInput) {
+    chatInput.blur();
+  }
 }
 
 function worldToScreen(x, y) {
@@ -356,6 +410,16 @@ window.addEventListener("mousemove", (e) => {
 });
 
 window.addEventListener("keydown", (e) => {
+  if (e.key === "g" || e.key === "G") {
+    e.preventDefault();
+    setChatOpen(!chatOpen);
+    return;
+  }
+
+  if (chatOpen) {
+    return;
+  }
+
   if (e.code === "Space") {
     e.preventDefault();
     state.splitQueued = true;
@@ -430,7 +494,5 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
-loop();
-
-
+loop(); just update this one please keep things simpel and straightforward so its easy for me to keep track of what im doing please do not make any huge changes if not necessary please direct me in what to replace and where 
 
