@@ -32,27 +32,28 @@
     />
   </div>
 
-  <div class="authPanel" id="authPanel">
-    <h2>Account</h2>
-    <input id="authUsername" type="text" placeholder="Username" maxlength="20" />
-    <input id="authPassword" type="password" placeholder="Password" maxlength="64" />
-
-    <div class="authButtons">
-      <button id="registerBtn" type="button">Register</button>
-      <button id="loginBtn" type="button">Login</button>
-      <button id="logoutBtn" type="button" style="display:none;">Logout</button>
-    </div>
-
-    <div id="authStatus"></div>
-  </div>
-
   <!-- Landing page -->
   <div class="landingScreen" id="landingScreen">
     <div class="moneyBg" id="moneyBg"></div>
+
     <div class="landingPanel">
       <h1>PIPO.IO</h1>
       <p>Grow bigger. Dominate the map.</p>
       <button id="startMenuBtn">PLAY</button>
+    </div>
+
+    <div class="authPanel" id="authPanel" style="display:none;">
+      <h2>Account</h2>
+      <input id="authUsername" type="text" placeholder="Username" maxlength="20" />
+      <input id="authPassword" type="password" placeholder="Password" maxlength="64" />
+
+      <div class="authButtons">
+        <button id="registerBtn" type="button">Register</button>
+        <button id="loginBtn" type="button">Login</button>
+        <button id="logoutBtn" type="button" style="display:none;">Logout</button>
+      </div>
+
+      <div id="authStatus"></div>
     </div>
   </div>
 
