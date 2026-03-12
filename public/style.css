@@ -22,6 +22,7 @@ canvas {
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.08);
+  overflow: hidden;
 }
 
 .panel {
@@ -138,7 +139,6 @@ canvas {
 
 .leaderboardEntries div {
   margin: 4px 0;
-
 }
 
 .chatBox {
@@ -231,7 +231,10 @@ canvas {
 }
 
 #startMenuBtn,
-#playBtn {
+#playBtn,
+#registerBtn,
+#loginBtn,
+#logoutBtn {
   width: 100%;
   box-sizing: border-box;
   padding: 12px 14px;
@@ -315,4 +318,52 @@ canvas {
   border: 0;
   background: transparent;
   cursor: pointer;
+}
+
+.authPanel {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  width: 260px;
+  background: rgba(255,255,255,0.95);
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  padding: 14px;
+  z-index: 50;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+}
+
+.authPanel h2 {
+  margin: 0 0 10px;
+  font-size: 20px;
+  color: #333;
+}
+
+.authPanel input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.authButtons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+#logoutBtn {
+  grid-column: 1 / -1;
+}
+
+#authStatus {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #555;
+  min-height: 18px;
 }
