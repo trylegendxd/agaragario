@@ -464,25 +464,30 @@ io.on("connection", (socket) => {
 resetWorldObjects();
 
 setInterval(() => {
-  for (const player of players.values()) {
-    movePlayer(player);
-    splitPlayer(player);
-    ejectMass(player);
-    handleFoodEating(player);
-    handleVirusCollisions(player);
-    handleSelfMerge(player);
-  }
+  try {
+    for (const player of players.values()) {
+      movePlayer(player);
+      splitPlayer(player);
+      ejectMass(player);
+      handleFoodEating(player);
+      handleVirusCollisions(player);
+      handleSelfMerge(player);
+    }
 
-  handlePlayerVsPlayer();
+    handlePlayerVsPlayer();
 
-  for (const [id, player] of players.entries()) {
-    const socket = io.sockets.sockets.get(id);
-    if (!socket) continue;
-    socket.emit("state", buildSnapshotFor(player));
+    for (const [id, player] of players.entries()) {
+      const socket = io.sockets.sockets.get(id);
+      if (!socket) continue;
+      socket.emit("state", buildSnapshotFor(player));
+    }
+  } catch (err) {
+    console.error("GAME LOOP ERROR:", err);
   }
 }, 1000 / TICK_RATE);
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
 });
+
 
