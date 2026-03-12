@@ -1,17 +1,19 @@
 {
   "name": "pipo-io",
   "version": "1.0.0",
-  "description": "PIPO.IO multiplayer game with auth",
+  "description": "PIPO.IO multiplayer game server",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
-    "better-sqlite3": "latest",
+    "better-sqlite3": "^11.7.0",
     "express": "^4.21.2",
-    "express-session": "^1.19.0",
+    "express-session": "^1.18.1",
     "socket.io": "^4.8.1"
   }
 }
