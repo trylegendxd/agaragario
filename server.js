@@ -1,5 +1,5 @@
-const path = require("path");
 const fs = require("fs");
+const path = require("path");
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -8,23 +8,40 @@ const Database = require("better-sqlite3");
 const bcrypt = require("bcryptjs");
 
 const app = express();
-app.set("trust proxy", 1);
-
 const server = http.createServer(app);
 const io = new Server(server, {
-  transports: ["websocket", "polling"]
+  cors: {
+    origin: true,
+    credentials: true
+  }
 });
 
-const DEFAULT_DATA_DIR = fs.existsSync("/var/data") ? "/var/data" : __dirname;
-const DATA_DIR = process.env.DATA_DIR || DEFAULT_DATA_DIR;
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "pipo.db");
+const PORT = Number(process.env.PORT || 3000);
+const PUBLIC_DIR = path.join(__dirname, "public");
+const DATA_DIR = fs.existsSync("/var/data") ? "/var/data" : __dirname;
+const DB_PATH = path.join(DATA_DIR, "pipo.db");
+
+const WORLD_SIZE = 12000;
+const FOOD_COUNT = 3000;
+const VIRUS_COUNT = 35;
+const BOT_COUNT = 8;
+const TICK_RATE = 45;
+const MAX_CELLS = 16;
+const SNAPSHOT_PADDING = 650;
+const MAX_CHAT_MESSAGES = 40;
+const START_MASS = 30;
+const GAME_ENTRY_COST = 1;
+const REGISTER_BONUS = 5;
+
+const players = new Map();
+const playerByUserId = new Map();
+const food = [];
+const viruses = [];
+const bots = [];
+const chatMessages = [];
+
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
-db.pragma("synchronous = NORMAL");
-db.pragma("busy_timeout = 5000");
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -33,30 +50,23 @@ db.exec(`
     password_hash TEXT NOT NULL,
     credits REAL NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  )
-`);
+  );
 
-try {
-  db.exec(`ALTER TABLE users ADD COLUMN credits REAL NOT NULL DEFAULT 0`);
-} catch (err) {
-  if (!String(err.message || "").includes("duplicate column name")) throw err;
-}
-
-db.exec(`
   CREATE TABLE IF NOT EXISTS credit_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
-    kind TEXT NOT NULL,
-    amount_eur REAL NOT NULL DEFAULT 0,
-    credits_delta REAL NOT NULL DEFAULT 0,
-    currency TEXT,
-    tx_reference TEXT,
-    status TEXT NOT NULL DEFAULT 'completed',
-    metadata_json TEXT,
+    type TEXT NOT NULL,
+    amount REAL NOT NULL,
+    note TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id)
-  )
+  );
 `);
+
+const userColumns = db.prepare("PRAGMA table_info(users)").all();
+if (!userColumns.some((col) => col.name === "credits")) {
+  db.exec("ALTER TABLE users ADD COLUMN credits REAL NOT NULL DEFAULT 0");
+}
 
 const sessionMiddleware = session({
   secret: process.env.SESSION_SECRET || "change-this-secret-in-production",
@@ -65,43 +75,21 @@ const sessionMiddleware = session({
   cookie: {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production"
+    secure: false,
+    maxAge: 1000 * 60 * 60 * 24 * 14
   }
 });
 
-const PORT = process.env.PORT || 3000;
-const SOLANA_RECEIVE_ADDRESS = process.env.SOLANA_RECEIVE_ADDRESS || "";
-const EUR_TO_CREDITS = 1;
+function wrap(middleware) {
+  return (socket, next) => middleware(socket.request, {}, next);
+}
+
+io.use(wrap(sessionMiddleware));
 
 app.use(express.json());
 app.use(sessionMiddleware);
-
-const PUBLIC_DIR = path.join(__dirname, "public");
-const STATIC_DIR = fs.existsSync(PUBLIC_DIR) ? PUBLIC_DIR : __dirname;
-app.use(express.static(STATIC_DIR));
-app.get("/", (req, res) => {
-  res.sendFile(path.join(STATIC_DIR, "index.html"));
-});
-
-const WORLD_SIZE = 12000;
-const FOOD_COUNT = 3000;
-const VIRUS_COUNT = 35;
-const TICK_RATE = 45;
-const MAX_CELLS = 16;
-const SNAPSHOT_PADDING = 650;
-const FOOD_NEAR_CHECK = 160;
-const FOOD_NEAR_CHECK_SQ = FOOD_NEAR_CHECK * FOOD_NEAR_CHECK;
-const BOT_COUNT = 8;
-const BOT_VIEW_RADIUS = 2600;
-const BOT_NAMES = ["PIX", "MINT", "NOVA", "BLOB", "RIFT", "BYTE", "ZING", "GLOW"];
-
-const players = new Map();
-const bots = new Map();
-const food = [];
-const viruses = [];
-
-const chatMessages = [];
-const MAX_CHAT_MESSAGES = 40;
+app.use(express.static(PUBLIC_DIR));
+app.get("/", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
 
 function rand(min, max) {
   return Math.random() * (max - min) + min;
@@ -109,6 +97,10 @@ function rand(min, max) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function distance(ax, ay, bx, by) {
+  return Math.hypot(ax - bx, ay - by);
 }
 
 function distanceSq(ax, ay, bx, by) {
@@ -124,6 +116,17 @@ function radiusFromMass(mass) {
 function randomColor() {
   const hue = Math.floor(rand(0, 360));
   return `hsl(${hue}, 80%, 58%)`;
+}
+
+function randomSpawnCell() {
+  return {
+    x: rand(-WORLD_SIZE / 2 + 400, WORLD_SIZE / 2 - 400),
+    y: rand(-WORLD_SIZE / 2 + 400, WORLD_SIZE / 2 - 400),
+    mass: START_MASS,
+    vx: 0,
+    vy: 0,
+    mergeTimer: 0
+  };
 }
 
 function createFood() {
@@ -146,16 +149,16 @@ function createVirus() {
   };
 }
 
-function totalMass(player) {
-  return player.cells.reduce((sum, c) => sum + c.mass, 0);
+function totalMass(entity) {
+  return entity.cells.reduce((sum, cell) => sum + cell.mass, 0);
 }
 
-function playerCenter(player) {
+function entityCenter(entity) {
   let total = 0;
   let sx = 0;
   let sy = 0;
 
-  for (const cell of player.cells) {
+  for (const cell of entity.cells) {
     total += cell.mass;
     sx += cell.x * cell.mass;
     sy += cell.y * cell.mass;
@@ -165,147 +168,56 @@ function playerCenter(player) {
   return { x: sx / total, y: sy / total };
 }
 
-function respawnCell() {
-  const pad = WORLD_SIZE / 2 - 220;
+function createHumanPlayer(socketId, user, payload) {
+  const requestedName = typeof payload === "object" ? payload?.name : payload;
+  const requestedColor = typeof payload === "object" ? payload?.color : null;
+  const safeName =
+    String(requestedName || user.username || "Player").trim().slice(0, 16) ||
+    "Player";
+
   return {
-    x: rand(-pad, pad),
-    y: rand(-pad, pad),
-    mass: 30,
-    vx: 0,
-    vy: 0,
-    mergeTimer: 0
+    kind: "human",
+    id: socketId,
+    userId: user.id,
+    username: user.username,
+    name: safeName,
+    color: requestedColor || randomColor(),
+    mouse: { x: 0, y: 0 },
+    wantsSplit: false,
+    wantsEject: false,
+    cells: [randomSpawnCell()],
+    alive: true,
+    joinedAt: Date.now()
   };
 }
 
-function createPlayer(id, name, account = null) {
+function createBot(index) {
   return {
-    id,
-    userId: account?.id || null,
-    username: account?.username || null,
-    name: (name || account?.username || "Player").slice(0, 16),
+    kind: "bot",
+    id: `bot-${index}-${Math.random().toString(36).slice(2, 8)}`,
+    name: `Bot ${index + 1}`,
     color: randomColor(),
     mouse: { x: 0, y: 0 },
     wantsSplit: false,
     wantsEject: false,
-    isBot: false,
-    cells: [respawnCell()]
+    cells: [randomSpawnCell()],
+    alive: true,
+    botIndex: index,
+    brainTick: 0
   };
 }
 
-function createBot(id, name) {
-  return {
-    id,
-    userId: null,
-    username: null,
-    name: String(name || "Bot").slice(0, 16),
-    color: randomColor(),
-    mouse: { x: rand(-500, 500), y: rand(-500, 500) },
-    wantsSplit: false,
-    wantsEject: false,
-    isBot: true,
-    roamTimer: 0,
-    roamAngle: rand(0, Math.PI * 2),
-    cells: [respawnCell()]
-  };
+function isHuman(entity) {
+  return entity.kind === "human";
 }
 
-function getAllEntities() {
-  return [...players.values(), ...bots.values()];
-}
-
-function respawnBot(bot) {
-  bot.color = randomColor();
-  bot.cells = [respawnCell()];
-  bot.mouse.x = rand(-500, 500);
-  bot.mouse.y = rand(-500, 500);
-  bot.wantsSplit = false;
-  bot.wantsEject = false;
-  bot.roamTimer = 0;
-}
-
-function ensureBots() {
-  while (bots.size < BOT_COUNT) {
-    const index = bots.size;
-    const id = `bot-${index + 1}`;
-    const name = `${BOT_NAMES[index % BOT_NAMES.length]}-${index + 1}`;
-    bots.set(id, createBot(id, name));
-  }
-}
-
-function updateBotAi(bot) {
-  const center = playerCenter(bot);
-  const myMass = totalMass(bot);
-  let fleeX = 0;
-  let fleeY = 0;
-  let fleePower = 0;
-  let chaseTarget = null;
-  let chaseDistSq = Infinity;
-
-  for (const player of players.values()) {
-    const pCenter = playerCenter(player);
-    const dx = center.x - pCenter.x;
-    const dy = center.y - pCenter.y;
-    const dSq = dx * dx + dy * dy + 1;
-    if (dSq > BOT_VIEW_RADIUS * BOT_VIEW_RADIUS) continue;
-    const weight = (BOT_VIEW_RADIUS * BOT_VIEW_RADIUS) / dSq;
-    fleeX += dx * weight;
-    fleeY += dy * weight;
-    fleePower += weight;
-  }
-
-  for (const other of bots.values()) {
-    if (other.id === bot.id) continue;
-    const otherCenter = playerCenter(other);
-    const dx = center.x - otherCenter.x;
-    const dy = center.y - otherCenter.y;
-    const dSq = dx * dx + dy * dy + 1;
-    if (dSq > BOT_VIEW_RADIUS * BOT_VIEW_RADIUS) continue;
-
-    const otherMass = totalMass(other);
-    if (myMass > otherMass * 1.18) {
-      if (dSq < chaseDistSq) {
-        chaseDistSq = dSq;
-        chaseTarget = otherCenter;
-      }
-    } else {
-      const weight = (BOT_VIEW_RADIUS * BOT_VIEW_RADIUS) / dSq;
-      fleeX += dx * weight;
-      fleeY += dy * weight;
-      fleePower += weight;
-    }
-  }
-
-  if (fleePower > 0.12) {
-    bot.mouse.x = fleeX;
-    bot.mouse.y = fleeY;
-    bot.wantsSplit = false;
-    return;
-  }
-
-  if (chaseTarget) {
-    bot.mouse.x = chaseTarget.x - center.x;
-    bot.mouse.y = chaseTarget.y - center.y;
-    if (myMass > 70 && chaseDistSq < 420 * 420 && bot.cells.length < MAX_CELLS) {
-      bot.wantsSplit = true;
-    }
-    return;
-  }
-
-  if (bot.roamTimer <= 0) {
-    bot.roamTimer = 40 + Math.floor(rand(0, 90));
-    bot.roamAngle = rand(0, Math.PI * 2);
-  } else {
-    bot.roamTimer--;
-  }
-
-  bot.mouse.x = Math.cos(bot.roamAngle) * 320;
-  bot.mouse.y = Math.sin(bot.roamAngle) * 320;
+function isBot(entity) {
+  return entity.kind === "bot";
 }
 
 function addChatMessage(name, text) {
   const cleanName = String(name || "Player").slice(0, 16);
   const cleanText = String(text || "").trim().slice(0, 160);
-
   if (!cleanText) return;
 
   const msg = {
@@ -316,371 +228,31 @@ function addChatMessage(name, text) {
   };
 
   chatMessages.push(msg);
-
-  while (chatMessages.length > MAX_CHAT_MESSAGES) {
-    chatMessages.shift();
-  }
-
-  io.sockets.emit("chat", msg);
-}
-
-function resetWorldObjects() {
-  food.length = 0;
-  viruses.length = 0;
-
-  for (let i = 0; i < FOOD_COUNT; i++) {
-    food.push(createFood());
-  }
-
-  for (let i = 0; i < VIRUS_COUNT; i++) {
-    viruses.push(createVirus());
-  }
-}
-
-function movePlayer(player) {
-  for (const cell of player.cells) {
-    const speed = 3.1 / Math.pow(cell.mass, 0.16);
-    const len = Math.hypot(player.mouse.x, player.mouse.y) || 1;
-    const dirX = player.mouse.x / len;
-    const dirY = player.mouse.y / len;
-    const distFactor = Math.min(len / 180, 1);
-
-    cell.vx += dirX * speed * distFactor;
-    cell.vy += dirY * speed * distFactor;
-
-    cell.vx *= 0.84;
-    cell.vy *= 0.84;
-
-    cell.x += cell.vx;
-    cell.y += cell.vy;
-
-    if (cell.mergeTimer > 0) cell.mergeTimer--;
-  }
-
-  for (let i = 0; i < player.cells.length; i++) {
-    for (let j = i + 1; j < player.cells.length; j++) {
-      const a = player.cells[i];
-      const b = player.cells[j];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const d = Math.hypot(dx, dy) || 1;
-      const minD = (radiusFromMass(a.mass) + radiusFromMass(b.mass)) * 0.55;
-
-      if (d < minD) {
-        const push = (minD - d) * 0.1;
-        a.x -= (dx / d) * push;
-        a.y -= (dy / d) * push;
-        b.x += (dx / d) * push;
-        b.y += (dy / d) * push;
-      }
-    }
-  }
-
-  for (const cell of player.cells) {
-    const r = radiusFromMass(cell.mass);
-    const bound = WORLD_SIZE / 2 - r;
-    cell.x = clamp(cell.x, -bound, bound);
-    cell.y = clamp(cell.y, -bound, bound);
-  }
-}
-
-function splitPlayer(player) {
-  if (!player.wantsSplit) return;
-  player.wantsSplit = false;
-
-  if (player.cells.length >= MAX_CELLS) return;
-
-  const len = Math.hypot(player.mouse.x, player.mouse.y) || 1;
-  const dirX = player.mouse.x / len;
-  const dirY = player.mouse.y / len;
-
-  const newCells = [];
-
-  for (const cell of player.cells) {
-    if (cell.mass < 36) continue;
-    if (player.cells.length + newCells.length >= MAX_CELLS) break;
-
-    const childMass = cell.mass / 2;
-    cell.mass = childMass;
-    const r = radiusFromMass(childMass);
-
-    newCells.push({
-      x: cell.x + dirX * (r * 2.2),
-      y: cell.y + dirY * (r * 2.2),
-      mass: childMass,
-      vx: dirX * 24,
-      vy: dirY * 24,
-      mergeTimer: 220
-    });
-
-    cell.mergeTimer = 220;
-  }
-
-  player.cells.push(...newCells);
-}
-
-function ejectMass(player) {
-  if (!player.wantsEject) return;
-  player.wantsEject = false;
-
-  const len = Math.hypot(player.mouse.x, player.mouse.y) || 1;
-  const dirX = player.mouse.x / len;
-  const dirY = player.mouse.y / len;
-
-  for (const cell of player.cells) {
-    if (cell.mass <= 20) continue;
-    cell.mass -= 1;
-
-    food.push({
-      id: Math.random().toString(36).slice(2),
-      x: cell.x + dirX * (radiusFromMass(cell.mass) + 20),
-      y: cell.y + dirY * (radiusFromMass(cell.mass) + 20),
-      r: 8,
-      color: "#33c3ff",
-      mass: 1
-    });
-  }
-}
-
-function removeFoodAt(index) {
-  const last = food.length - 1;
-  if (index !== last) {
-    food[index] = food[last];
-  }
-  food.pop();
-}
-
-function handleFoodEating(player) {
-  for (const cell of player.cells) {
-    const r = radiusFromMass(cell.mass);
-    const eatRadiusSq = (r + 8) * (r + 8);
-
-    for (let i = food.length - 1; i >= 0; i--) {
-      const f = food[i];
-      const dx = cell.x - f.x;
-      if (dx > FOOD_NEAR_CHECK || dx < -FOOD_NEAR_CHECK) continue;
-      const dy = cell.y - f.y;
-      if (dy > FOOD_NEAR_CHECK || dy < -FOOD_NEAR_CHECK) continue;
-      const dsq = dx * dx + dy * dy;
-      if (dsq > FOOD_NEAR_CHECK_SQ) continue;
-
-      if (dsq < eatRadiusSq) {
-        cell.mass += f.mass;
-        removeFoodAt(i);
-      }
-    }
-  }
-
-  while (food.length < FOOD_COUNT) {
-    food.push(createFood());
-  }
-}
-
-function splitByVirus(player, cellIndex, virusIndex) {
-  const cell = player.cells[cellIndex];
-  if (!cell) return;
-  if (player.cells.length >= MAX_CELLS) return;
-
-  const piecesWanted = Math.min(
-    MAX_CELLS - player.cells.length + 1,
-    Math.max(2, Math.min(8, Math.floor(cell.mass / 18)))
-  );
-
-  if (piecesWanted < 2) return;
-
-  const partMass = cell.mass / piecesWanted;
-  cell.mass = partMass;
-  cell.mergeTimer = 300;
-
-  for (let i = 1; i < piecesWanted; i++) {
-    const ang = (Math.PI * 2 * i) / piecesWanted;
-    player.cells.push({
-      x: cell.x + Math.cos(ang) * 20,
-      y: cell.y + Math.sin(ang) * 20,
-      mass: partMass,
-      vx: Math.cos(ang) * 18,
-      vy: Math.sin(ang) * 18,
-      mergeTimer: 300
-    });
-  }
-
-  viruses.splice(virusIndex, 1);
-  viruses.push(createVirus());
-}
-
-function handleVirusCollisions(player) {
-  for (let v = viruses.length - 1; v >= 0; v--) {
-    const virus = viruses[v];
-
-    for (let c = player.cells.length - 1; c >= 0; c--) {
-      const cell = player.cells[c];
-      const r = radiusFromMass(cell.mass);
-
-      if (cell.mass >= 36 && distanceSq(cell.x, cell.y, virus.x, virus.y) < (r - virus.r * 0.15) ** 2) {
-        splitByVirus(player, c, v);
-        break;
-      }
-    }
-  }
-}
-
-function handlePlayerVsPlayer() {
-  const all = getAllEntities();
-
-  for (let i = 0; i < all.length; i++) {
-    for (let j = i + 1; j < all.length; j++) {
-      const A = all[i];
-      const B = all[j];
-
-      for (const a of [...A.cells]) {
-        for (const b of [...B.cells]) {
-          const rA = radiusFromMass(a.mass);
-          const rB = radiusFromMass(b.mass);
-          const bigger = a.mass > b.mass * 1.15 ? a : b.mass > a.mass * 1.15 ? b : null;
-          const smaller = bigger === a ? b : bigger === b ? a : null;
-          if (!bigger || !smaller) continue;
-
-          const dSq = distanceSq(a.x, a.y, b.x, b.y);
-          const minEat = Math.max(rA, rB) * 0.9;
-
-          if (dSq < minEat * minEat) {
-            bigger.mass += smaller.mass;
-
-            if (smaller === a) {
-              A.cells = A.cells.filter((c) => c !== a);
-              if (!A.cells.length) {
-                if (A.isBot) respawnBot(A);
-                else A.cells = [respawnCell()];
-              }
-            } else {
-              B.cells = B.cells.filter((c) => c !== b);
-              if (!B.cells.length) {
-                if (B.isBot) respawnBot(B);
-                else B.cells = [respawnCell()];
-              }
-            }
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  ensureBots();
-}
-
-function handleSelfMerge(player) {
-  if (player.cells.length <= 1) return;
-
-  for (let i = 0; i < player.cells.length; i++) {
-    for (let j = i + 1; j < player.cells.length; j++) {
-      const a = player.cells[i];
-      const b = player.cells[j];
-      const limit = Math.max(radiusFromMass(a.mass), radiusFromMass(b.mass)) * 0.6;
-
-      if (a.mergeTimer <= 0 && b.mergeTimer <= 0 && distanceSq(a.x, a.y, b.x, b.y) < limit * limit) {
-        a.mass += b.mass;
-        player.cells.splice(j, 1);
-        j--;
-      }
-    }
-  }
-}
-
-function buildLeaderboard() {
-  return getAllEntities()
-    .map((p) => ({
-      name: p.name,
-      mass: Math.round(totalMass(p))
-    }))
-    .sort((a, b) => b.mass - a.mass)
-    .slice(0, 10);
-}
-
-function buildSnapshotFor(targetPlayer) {
-  const center = playerCenter(targetPlayer);
-  const total = totalMass(targetPlayer);
-  const biggestCellMass = targetPlayer.cells.length
-    ? Math.max(...targetPlayer.cells.map((c) => c.mass))
-    : total;
-
-  const biggestRadius = radiusFromMass(biggestCellMass);
-  const visibleRadius = Math.max(1700, biggestRadius * 5.3 + SNAPSHOT_PADDING);
-
-  const visibleFood = [];
-  for (const f of food) {
-    if (Math.abs(f.x - center.x) > visibleRadius) continue;
-    if (Math.abs(f.y - center.y) > visibleRadius) continue;
-    visibleFood.push(f);
-  }
-
-  const visibleViruses = [];
-  for (const v of viruses) {
-    if (Math.abs(v.x - center.x) > visibleRadius) continue;
-    if (Math.abs(v.y - center.y) > visibleRadius) continue;
-    visibleViruses.push(v);
-  }
-
-  const visiblePlayers = [];
-  for (const p of players.values()) {
-    const pCenter = playerCenter(p);
-
-    if (
-      p.id !== targetPlayer.id &&
-      Math.abs(pCenter.x - center.x) > visibleRadius &&
-      Math.abs(pCenter.y - center.y) > visibleRadius
-    ) {
-      continue;
-    }
-
-    visiblePlayers.push({
-      id: p.id,
-      name: p.name,
-      color: p.color,
-      totalMass: Math.round(totalMass(p)),
-      cells: p.cells.map((c) => ({
-        x: Math.round(c.x * 10) / 10,
-        y: Math.round(c.y * 10) / 10,
-        mass: Math.round(c.mass * 10) / 10
-      }))
-    });
-  }
-
-  visiblePlayers.sort((a, b) => a.totalMass - b.totalMass);
-
-  return {
-    worldSize: WORLD_SIZE,
-    food: visibleFood,
-    viruses: visibleViruses,
-    players: visiblePlayers,
-    leaderboard: buildLeaderboard(),
-    debugPlayerCount: players.size,
-    debugBotCount: bots.size
-  };
+  while (chatMessages.length > MAX_CHAT_MESSAGES) chatMessages.shift();
+  io.emit("chat", msg);
 }
 
 function getSessionUser(req) {
-  return req.session.user || null;
-}
+  const raw = req.session?.user;
+  if (!raw?.id) return null;
 
-function getFreshSessionUser(req) {
-  const sessionUser = getSessionUser(req);
-  if (!sessionUser?.id) return null;
+  const row = db
+    .prepare("SELECT id, username, credits FROM users WHERE id = ?")
+    .get(raw.id);
 
-  const user = db.prepare("SELECT id, username, credits FROM users WHERE id = ?").get(sessionUser.id);
-  if (!user) return null;
+  if (!row) return null;
 
   req.session.user = {
-    id: user.id,
-    username: user.username,
-    credits: Number(user.credits || 0)
+    id: row.id,
+    username: row.username,
+    credits: Number(row.credits || 0)
   };
 
   return req.session.user;
 }
 
 function requireAuth(req, res, next) {
-  const user = getFreshSessionUser(req);
+  const user = getSessionUser(req);
   if (!user) {
     return res.status(401).json({ error: "You must be logged in." });
   }
@@ -688,35 +260,67 @@ function requireAuth(req, res, next) {
   next();
 }
 
-const addCreditsStmt = db.prepare(`
-  UPDATE users
-  SET credits = ROUND(credits + ?, 2)
+const insertCreditTransaction = db.prepare(`
+  INSERT INTO credit_transactions (user_id, type, amount, note)
+  VALUES (?, ?, ?, ?)
+`);
+
+const setUserCredits = db.prepare(`
+  UPDATE users SET credits = ? WHERE id = ?
+`);
+
+const getUserByUsername = db.prepare(`
+  SELECT id, username, password_hash, credits
+  FROM users
+  WHERE username = ?
+`);
+
+const getUserById = db.prepare(`
+  SELECT id, username, credits
+  FROM users
   WHERE id = ?
 `);
 
-const insertCreditTxStmt = db.prepare(`
-  INSERT INTO credit_transactions
-    (user_id, kind, amount_eur, credits_delta, currency, tx_reference, status, metadata_json)
-  VALUES
-    (?, ?, ?, ?, ?, ?, ?, ?)
-`);
+const createUserWithBonus = db.transaction((username, passwordHash) => {
+  const result = db
+    .prepare("INSERT INTO users (username, password_hash, credits) VALUES (?, ?, ?)")
+    .run(username, passwordHash, REGISTER_BONUS);
 
-const getUserCreditsStmt = db.prepare("SELECT credits FROM users WHERE id = ?");
-
-const applyCreditChange = db.transaction((userId, creditsDelta, details = {}) => {
-  addCreditsStmt.run(creditsDelta, userId);
-  insertCreditTxStmt.run(
-    userId,
-    details.kind || "manual",
-    Number(details.amountEur || 0),
-    Number(creditsDelta || 0),
-    details.currency || null,
-    details.txReference || null,
-    details.status || "completed",
-    details.metadata ? JSON.stringify(details.metadata) : null
+  insertCreditTransaction.run(
+    result.lastInsertRowid,
+    "register_bonus",
+    REGISTER_BONUS,
+    "Welcome bonus"
   );
-  const row = getUserCreditsStmt.get(userId);
-  return Number(row?.credits || 0);
+
+  return result.lastInsertRowid;
+});
+
+const addCreditsTx = db.transaction((userId, amount, type, note) => {
+  const current = getUserById.get(userId);
+  if (!current) throw new Error("USER_NOT_FOUND");
+
+  const nextCredits = Number(current.credits || 0) + Number(amount);
+  setUserCredits.run(nextCredits, userId);
+  insertCreditTransaction.run(userId, type, amount, note || null);
+  return nextCredits;
+});
+
+const spendCreditsTx = db.transaction((userId, amount, type, note) => {
+  const current = getUserById.get(userId);
+  if (!current) throw new Error("USER_NOT_FOUND");
+
+  const currentCredits = Number(current.credits || 0);
+  if (currentCredits < amount) {
+    const err = new Error("INSUFFICIENT_CREDITS");
+    err.code = "INSUFFICIENT_CREDITS";
+    throw err;
+  }
+
+  const nextCredits = currentCredits - Number(amount);
+  setUserCredits.run(nextCredits, userId);
+  insertCreditTransaction.run(userId, type, -Math.abs(amount), note || null);
+  return nextCredits;
 });
 
 app.post("/api/register", async (req, res) => {
@@ -725,28 +329,38 @@ app.post("/api/register", async (req, res) => {
     const password = String(req.body?.password || "");
 
     if (username.length < 3 || username.length > 20) {
-      return res.status(400).json({ error: "Username must be 3-20 characters." });
+      return res
+        .status(400)
+        .json({ error: "Username must be 3-20 characters." });
     }
 
     if (password.length < 6) {
-      return res.status(400).json({ error: "Password must be at least 6 characters." });
+      return res
+        .status(400)
+        .json({ error: "Password must be at least 6 characters." });
     }
 
-    const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(username);
+    const existing = getUserByUsername.get(username);
     if (existing) {
       return res.status(409).json({ error: "Username already exists." });
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const result = db.prepare("INSERT INTO users (username, password_hash, credits) VALUES (?, ?, ?)").run(username, passwordHash, 0);
+    const userId = createUserWithBonus(username, passwordHash);
+    const user = getUserById.get(userId);
 
     req.session.user = {
-      id: result.lastInsertRowid,
-      username,
-      credits: 0
+      id: user.id,
+      username: user.username,
+      credits: Number(user.credits || 0)
     };
+    req.session.gameEntryReady = false;
 
-    res.json({ ok: true, user: getFreshSessionUser(req) });
+    res.json({
+      ok: true,
+      user: req.session.user,
+      bonusCredits: REGISTER_BONUS
+    });
   } catch (err) {
     console.error("REGISTER ERROR:", err);
     res.status(500).json({ error: "Failed to register." });
@@ -758,7 +372,7 @@ app.post("/api/login", async (req, res) => {
     const username = String(req.body?.username || "").trim();
     const password = String(req.body?.password || "");
 
-    const user = db.prepare("SELECT id, username, password_hash, credits FROM users WHERE username = ?").get(username);
+    const user = getUserByUsername.get(username);
     if (!user) {
       return res.status(401).json({ error: "Invalid username or password." });
     }
@@ -773,8 +387,9 @@ app.post("/api/login", async (req, res) => {
       username: user.username,
       credits: Number(user.credits || 0)
     };
+    req.session.gameEntryReady = false;
 
-    res.json({ ok: true, user: getFreshSessionUser(req) });
+    res.json({ ok: true, user: req.session.user });
   } catch (err) {
     console.error("LOGIN ERROR:", err);
     res.status(500).json({ error: "Failed to log in." });
@@ -782,119 +397,676 @@ app.post("/api/login", async (req, res) => {
 });
 
 app.post("/api/logout", (req, res) => {
-  req.session.destroy(() => res.json({ ok: true }));
+  req.session.destroy(() => {
+    res.json({ ok: true });
+  });
 });
 
 app.get("/api/me", (req, res) => {
-  res.json({ user: getFreshSessionUser(req) });
+  const user = getSessionUser(req);
+  res.json({ user: user || null });
 });
 
 app.get("/api/balance", requireAuth, (req, res) => {
-  res.json({ ok: true, credits: req.user.credits });
+  res.json({ ok: true, wallet: Number(req.user.credits || 0) });
 });
 
 app.get("/api/credits/history", requireAuth, (req, res) => {
-  const rows = db.prepare(`SELECT id, kind, amount_eur, credits_delta, currency, tx_reference, status, created_at FROM credit_transactions WHERE user_id = ? ORDER BY id DESC LIMIT 50`).all(req.user.id);
-  res.json({ ok: true, history: rows });
+  const rows = db
+    .prepare(`
+      SELECT id, type, amount, note, created_at
+      FROM credit_transactions
+      WHERE user_id = ?
+      ORDER BY id DESC
+      LIMIT 50
+    `)
+    .all(req.user.id);
+
+  res.json({ ok: true, items: rows });
 });
 
 app.post("/api/credits/add", requireAuth, (req, res) => {
-  const amountEur = Number(req.body?.amountEur);
-  if (!Number.isFinite(amountEur) || amountEur <= 0) {
-    return res.status(400).json({ error: "amountEur must be a positive number." });
+  try {
+    const amount = Number(req.body?.amount || 0);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: "Invalid amount." });
+    }
+
+    const wallet = addCreditsTx(
+      req.user.id,
+      amount,
+      "manual_add",
+      "Manual wallet top-up"
+    );
+
+    req.session.user.credits = wallet;
+    res.json({ ok: true, wallet });
+  } catch (err) {
+    console.error("ADD CREDITS ERROR:", err);
+    res.status(500).json({ error: "Failed to add balance." });
   }
-
-  const creditsToAdd = Math.round(amountEur * EUR_TO_CREDITS * 100) / 100;
-  const credits = applyCreditChange(req.user.id, creditsToAdd, {
-    kind: "manual_topup",
-    amountEur,
-    currency: "EUR",
-    txReference: String(req.body?.txReference || "") || null,
-    metadata: { source: "api_credits_add" }
-  });
-
-  req.session.user.credits = credits;
-  res.json({ ok: true, credits, addedCredits: creditsToAdd });
 });
 
 app.post("/api/credits/withdraw", requireAuth, (req, res) => {
-  const amountEur = Number(req.body?.amountEur ?? req.body?.credits);
-  const solanaAddress = String(req.body?.solanaAddress || "").trim();
+  try {
+    const amount = Number(req.body?.amount || 0);
 
-  if (!Number.isFinite(amountEur) || amountEur <= 0) {
-    return res.status(400).json({ error: "amountEur must be a positive number." });
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: "Invalid amount." });
+    }
+
+    const wallet = spendCreditsTx(
+      req.user.id,
+      amount,
+      "withdraw_request",
+      "Withdrawal request"
+    );
+
+    req.session.user.credits = wallet;
+    res.json({ ok: true, wallet, status: "requested" });
+  } catch (err) {
+    if (err.code === "INSUFFICIENT_CREDITS") {
+      return res.status(400).json({ error: "Not enough balance." });
+    }
+
+    console.error("WITHDRAW ERROR:", err);
+    res
+      .status(500)
+      .json({ error: "Failed to create withdrawal request." });
   }
-  if (solanaAddress.length < 20) {
-    return res.status(400).json({ error: "A valid Solana address is required." });
-  }
-
-  const roundedAmount = Math.round(amountEur * 100) / 100;
-  if (req.user.credits < roundedAmount) {
-    return res.status(400).json({ error: "Not enough wallet balance." });
-  }
-
-  const credits = applyCreditChange(req.user.id, -roundedAmount, {
-    kind: "withdrawal_request",
-    amountEur: roundedAmount,
-    currency: "SOL",
-    txReference: solanaAddress,
-    status: "pending_payout",
-    metadata: { solanaAddress, source: "api_credits_withdraw" }
-  });
-
-  req.session.user.credits = credits;
-  res.json({ ok: true, credits, requestedAmount: roundedAmount, status: "pending_payout" });
 });
 
 app.post("/api/payments/solana/quote", requireAuth, (req, res) => {
-  const amountEur = Number(req.body?.amountEur);
-  if (!Number.isFinite(amountEur) || amountEur <= 0) {
-    return res.status(400).json({ error: "amountEur must be a positive number." });
+  const euros = Number(req.body?.euros || 0);
+
+  if (!Number.isFinite(euros) || euros <= 0) {
+    return res.status(400).json({ error: "Invalid amount." });
   }
 
-  const roundedEur = Math.round(amountEur * 100) / 100;
-  const credits = Math.round(roundedEur * EUR_TO_CREDITS * 100) / 100;
-  const reference = `pipo-${req.user.id}-${Date.now()}`;
+  res.json({
+    ok: true,
+    euros,
+    credits: euros,
+    note: "1 euro = 1 wallet credit",
+    message:
+      "Quote only. On-chain Solana verification still needs to be implemented."
+  });
+});
 
-  insertCreditTxStmt.run(req.user.id, "solana_quote", roundedEur, 0, "EUR", reference, "pending", JSON.stringify({ address: SOLANA_RECEIVE_ADDRESS || null, note: "Awaiting on-chain confirmation" }));
+app.post("/api/game/enter", requireAuth, (req, res) => {
+  try {
+    const alreadySocket = playerByUserId.get(req.user.id);
+    if (alreadySocket && players.has(alreadySocket)) {
+      return res.json({
+        ok: true,
+        alreadyInGame: true,
+        wallet: Number(req.user.credits || 0)
+      });
+    }
 
-  res.json({ ok: true, amountEur: roundedEur, credits, receiveAddress: SOLANA_RECEIVE_ADDRESS, reference, note: "Quote created. To credit balances automatically, add a Solana webhook/verification step." });
+    const wallet = spendCreditsTx(
+      req.user.id,
+      GAME_ENTRY_COST,
+      "game_entry",
+      "Entered a match"
+    );
+
+    req.session.user.credits = wallet;
+    req.session.gameEntryReady = true;
+
+    req.session.save((err) => {
+      if (err) {
+        console.error("SESSION SAVE ERROR:", err);
+        return res.status(500).json({ error: "Failed to save game session." });
+      }
+
+      res.json({
+        ok: true,
+        wallet,
+        cost: GAME_ENTRY_COST
+      });
+    });
+  } catch (err) {
+    if (err.code === "INSUFFICIENT_CREDITS") {
+      return res.status(400).json({ error: "You need at least 1 credit to play." });
+    }
+
+    console.error("GAME ENTER ERROR:", err);
+    res.status(500).json({ error: "Failed to enter the game." });
+  }
 });
 
 app.get("/debug/players", (req, res) => {
   res.json({
     playerCount: players.size,
-    botCount: bots.size,
+    botCount: bots.length,
     players: [...players.values()].map((p) => ({
       id: p.id,
-      name: p.name,
       userId: p.userId,
+      name: p.name,
       totalMass: Math.round(totalMass(p)),
       cells: p.cells.length
     })),
+    bots: bots.map((b) => ({
+      id: b.id,
+      name: b.name,
+      totalMass: Math.round(totalMass(b)),
+      cells: b.cells.length
+    })),
+    food: food.length,
     chatMessages: chatMessages.length,
-    dbPath: DB_PATH,
-    dataDir: DATA_DIR
+    dbPath: DB_PATH
   });
 });
 
-io.use((socket, next) => {
-  sessionMiddleware(socket.request, {}, next);
-});
+function resetWorldObjects() {
+  food.length = 0;
+  viruses.length = 0;
+
+  for (let i = 0; i < FOOD_COUNT; i++) {
+    food.push(createFood());
+  }
+
+  for (let i = 0; i < VIRUS_COUNT; i++) {
+    viruses.push(createVirus());
+  }
+}
+
+function respawnMissingBots() {
+  while (bots.length < BOT_COUNT) {
+    bots.push(createBot(bots.length));
+  }
+}
+
+function moveEntity(entity) {
+  for (const cell of entity.cells) {
+    const speed = 2.9 / Math.pow(cell.mass, 0.16);
+    const len = Math.hypot(entity.mouse.x, entity.mouse.y) || 1;
+    const dirX = entity.mouse.x / len;
+    const dirY = entity.mouse.y / len;
+    const distFactor = Math.min(len / 220, 1);
+
+    cell.vx += dirX * speed * distFactor;
+    cell.vy += dirY * speed * distFactor;
+
+    cell.vx *= 0.89;
+    cell.vy *= 0.89;
+
+    cell.x += cell.vx;
+    cell.y += cell.vy;
+
+    if (cell.mergeTimer > 0) cell.mergeTimer--;
+  }
+
+  for (let i = 0; i < entity.cells.length; i++) {
+    for (let j = i + 1; j < entity.cells.length; j++) {
+      const a = entity.cells[i];
+      const b = entity.cells[j];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const d = Math.hypot(dx, dy) || 1;
+      const minD = (radiusFromMass(a.mass) + radiusFromMass(b.mass)) * 0.55;
+
+      if (d < minD) {
+        const push = (minD - d) * 0.08;
+        a.x -= (dx / d) * push;
+        a.y -= (dy / d) * push;
+        b.x += (dx / d) * push;
+        b.y += (dy / d) * push;
+      }
+    }
+  }
+
+  for (const cell of entity.cells) {
+    const r = radiusFromMass(cell.mass);
+    const bound = WORLD_SIZE / 2 - r;
+    cell.x = clamp(cell.x, -bound, bound);
+    cell.y = clamp(cell.y, -bound, bound);
+  }
+}
+
+function splitEntity(entity) {
+  if (!entity.wantsSplit) return;
+  entity.wantsSplit = false;
+
+  if (entity.cells.length >= MAX_CELLS) return;
+
+  const len = Math.hypot(entity.mouse.x, entity.mouse.y) || 1;
+  const dirX = entity.mouse.x / len;
+  const dirY = entity.mouse.y / len;
+  const newCells = [];
+
+  for (const cell of entity.cells) {
+    if (cell.mass < 36) continue;
+    if (entity.cells.length + newCells.length >= MAX_CELLS) break;
+
+    const childMass = cell.mass / 2;
+    cell.mass = childMass;
+    const r = radiusFromMass(childMass);
+
+    newCells.push({
+      x: cell.x + dirX * (r * 2.2),
+      y: cell.y + dirY * (r * 2.2),
+      mass: childMass,
+      vx: dirX * 22,
+      vy: dirY * 22,
+      mergeTimer: 220
+    });
+
+    cell.mergeTimer = 220;
+  }
+
+  entity.cells.push(...newCells);
+}
+
+function ejectMass(entity) {
+  if (!entity.wantsEject) return;
+  entity.wantsEject = false;
+
+  const len = Math.hypot(entity.mouse.x, entity.mouse.y) || 1;
+  const dirX = entity.mouse.x / len;
+  const dirY = entity.mouse.y / len;
+
+  for (const cell of entity.cells) {
+    if (cell.mass <= 20) continue;
+    cell.mass -= 1;
+
+    food.push({
+      id: Math.random().toString(36).slice(2),
+      x: clamp(
+        cell.x + dirX * (radiusFromMass(cell.mass) + 20),
+        -WORLD_SIZE / 2,
+        WORLD_SIZE / 2
+      ),
+      y: clamp(
+        cell.y + dirY * (radiusFromMass(cell.mass) + 20),
+        -WORLD_SIZE / 2,
+        WORLD_SIZE / 2
+      ),
+      r: 8,
+      color: entity.color,
+      mass: 1
+    });
+  }
+}
+
+function handleFoodEating(entity) {
+  for (const cell of entity.cells) {
+    const r = radiusFromMass(cell.mass);
+    const rr = (r + 8) * (r + 8);
+
+    for (let i = food.length - 1; i >= 0; i--) {
+      const f = food[i];
+      if (Math.abs(cell.x - f.x) > 120 || Math.abs(cell.y - f.y) > 120) continue;
+
+      if (distanceSq(cell.x, cell.y, f.x, f.y) < rr) {
+        cell.mass += f.mass;
+        food.splice(i, 1);
+      }
+    }
+  }
+
+  while (food.length < FOOD_COUNT) {
+    food.push(createFood());
+  }
+}
+
+function splitByVirus(entity, cellIndex, virusIndex) {
+  const cell = entity.cells[cellIndex];
+  if (!cell) return;
+  if (entity.cells.length >= MAX_CELLS) return;
+
+  const piecesWanted = Math.min(
+    MAX_CELLS - entity.cells.length + 1,
+    Math.max(2, Math.min(8, Math.floor(cell.mass / 18)))
+  );
+
+  if (piecesWanted < 2) return;
+
+  const partMass = cell.mass / piecesWanted;
+  cell.mass = partMass;
+  cell.mergeTimer = 300;
+
+  for (let i = 1; i < piecesWanted; i++) {
+    const ang = (Math.PI * 2 * i) / piecesWanted;
+    entity.cells.push({
+      x: cell.x + Math.cos(ang) * 20,
+      y: cell.y + Math.sin(ang) * 20,
+      mass: partMass,
+      vx: Math.cos(ang) * 18,
+      vy: Math.sin(ang) * 18,
+      mergeTimer: 300
+    });
+  }
+
+  viruses.splice(virusIndex, 1);
+  viruses.push(createVirus());
+}
+
+function handleVirusCollisions(entity) {
+  for (let v = viruses.length - 1; v >= 0; v--) {
+    const virus = viruses[v];
+
+    for (let c = entity.cells.length - 1; c >= 0; c--) {
+      const cell = entity.cells[c];
+      const r = radiusFromMass(cell.mass);
+
+      if (
+        cell.mass >= 36 &&
+        distance(cell.x, cell.y, virus.x, virus.y) < r - virus.r * 0.15
+      ) {
+        splitByVirus(entity, c, v);
+        break;
+      }
+    }
+  }
+}
+
+function handleSelfMerge(entity) {
+  if (entity.cells.length <= 1) return;
+
+  for (let i = 0; i < entity.cells.length; i++) {
+    for (let j = i + 1; j < entity.cells.length; j++) {
+      const a = entity.cells[i];
+      const b = entity.cells[j];
+      const d = distance(a.x, a.y, b.x, b.y);
+
+      if (
+        a.mergeTimer <= 0 &&
+        b.mergeTimer <= 0 &&
+        d < Math.max(radiusFromMass(a.mass), radiusFromMass(b.mass)) * 0.6
+      ) {
+        a.mass += b.mass;
+        entity.cells.splice(j, 1);
+        j--;
+      }
+    }
+  }
+}
+
+function botThink(bot) {
+  if (!bot.cells.length) return;
+
+  const center = entityCenter(bot);
+  const biggestMass = Math.max(...bot.cells.map((c) => c.mass));
+
+  let moveX = rand(-100, 100);
+  let moveY = rand(-100, 100);
+
+  for (const player of players.values()) {
+    if (!player.cells.length) continue;
+
+    const pc = entityCenter(player);
+    const d = distance(center.x, center.y, pc.x, pc.y);
+
+    if (d < 1100) {
+      moveX += (center.x - pc.x) * 2.2;
+      moveY += (center.y - pc.y) * 2.2;
+    }
+  }
+
+  for (const other of bots) {
+    if (other.id === bot.id || !other.cells.length) continue;
+
+    const oc = entityCenter(other);
+    const d = distance(center.x, center.y, oc.x, oc.y) || 1;
+    const otherMass = totalMass(other);
+
+    if (otherMass > biggestMass * 1.08 && d < 1200) {
+      moveX += (center.x - oc.x) * 1.8;
+      moveY += (center.y - oc.y) * 1.8;
+    } else if (biggestMass > otherMass * 1.18 && d < 1800) {
+      moveX += (oc.x - center.x) * 1.2;
+      moveY += (oc.y - center.y) * 1.2;
+    }
+  }
+
+  let nearestFood = null;
+  let nearestFoodDist = Infinity;
+
+  for (const f of food) {
+    const dx = f.x - center.x;
+    const dy = f.y - center.y;
+    const dsq = dx * dx + dy * dy;
+
+    if (dsq < nearestFoodDist && dsq < 260 * 260) {
+      nearestFoodDist = dsq;
+      nearestFood = f;
+    }
+  }
+
+  if (nearestFood) {
+    moveX += (nearestFood.x - center.x) * 0.45;
+    moveY += (nearestFood.y - center.y) * 0.45;
+  }
+
+  bot.mouse.x = clamp(moveX, -1400, 1400);
+  bot.mouse.y = clamp(moveY, -1400, 1400);
+}
+
+function eliminateHuman(player, eaterName) {
+  const socket = io.sockets.sockets.get(player.id);
+
+  if (socket) {
+    socket.emit("dead", {
+      by: eaterName || null,
+      message: eaterName ? `You were eaten by ${eaterName}.` : "You died."
+    });
+  }
+
+  player.alive = false;
+  players.delete(player.id);
+
+  if (player.userId) {
+    playerByUserId.delete(player.userId);
+  }
+
+  const req = socket?.request;
+  if (req?.session) {
+    req.session.gameEntryReady = false;
+    req.session.save(() => {});
+  }
+}
+
+function respawnBotAtIndex(index) {
+  bots[index] = createBot(index);
+}
+
+function eliminateBot(botIndex) {
+  respawnBotAtIndex(botIndex);
+}
+
+function handleEntityVsEntity() {
+  const livingHumans = [...players.values()];
+  const livingBots = bots.filter((b) => b.cells.length > 0);
+  const all = [...livingHumans, ...livingBots];
+
+  for (let i = 0; i < all.length; i++) {
+    for (let j = i + 1; j < all.length; j++) {
+      const a = all[i];
+      const b = all[j];
+
+      if (!a.cells.length || !b.cells.length) continue;
+
+      for (let ai = a.cells.length - 1; ai >= 0; ai--) {
+        const ac = a.cells[ai];
+        if (!ac) continue;
+
+        for (let bi = b.cells.length - 1; bi >= 0; bi--) {
+          const bc = b.cells[bi];
+          if (!bc) continue;
+
+          const ar = radiusFromMass(ac.mass);
+          const br = radiusFromMass(bc.mass);
+          const d = distance(ac.x, ac.y, bc.x, bc.y);
+
+          if (ac.mass > bc.mass * 1.12 && d < ar - br * 0.3) {
+            ac.mass += bc.mass;
+            b.cells.splice(bi, 1);
+
+            if (b.cells.length === 0) {
+              if (isHuman(b)) eliminateHuman(b, a.name);
+              else if (isBot(b)) eliminateBot(b.botIndex);
+            }
+          } else if (bc.mass > ac.mass * 1.12 && d < br - ar * 0.3) {
+            bc.mass += ac.mass;
+            a.cells.splice(ai, 1);
+
+            if (a.cells.length === 0) {
+              if (isHuman(a)) eliminateHuman(a, b.name);
+              else if (isBot(a)) eliminateBot(a.botIndex);
+            }
+
+            break;
+          }
+        }
+      }
+    }
+  }
+}
+
+function buildLeaderboard() {
+  const all = [
+    ...[...players.values()].filter((p) => p.cells.length > 0),
+    ...bots.filter((b) => b.cells.length > 0)
+  ];
+
+  return all
+    .map((entity) => ({
+      name: entity.name,
+      mass: Math.round(totalMass(entity))
+    }))
+    .sort((a, b) => b.mass - a.mass)
+    .slice(0, 10);
+}
+
+function buildSnapshotFor(targetPlayer) {
+  const center = entityCenter(targetPlayer);
+  const total = totalMass(targetPlayer);
+
+  const biggestCellMass = targetPlayer.cells.length
+    ? Math.max(...targetPlayer.cells.map((c) => c.mass))
+    : total;
+
+  const biggestRadius = radiusFromMass(biggestCellMass || START_MASS);
+  const visibleRadius = Math.max(2100, biggestRadius * 6 + SNAPSHOT_PADDING);
+
+  const visibleFood = [];
+  for (const f of food) {
+    if (
+      Math.abs(f.x - center.x) <= visibleRadius &&
+      Math.abs(f.y - center.y) <= visibleRadius
+    ) {
+      visibleFood.push(f);
+    }
+  }
+
+  const visibleViruses = [];
+  for (const v of viruses) {
+    if (
+      Math.abs(v.x - center.x) <= visibleRadius &&
+      Math.abs(v.y - center.y) <= visibleRadius
+    ) {
+      visibleViruses.push(v);
+    }
+  }
+
+  const visiblePlayers = [];
+  const all = [...players.values(), ...bots];
+
+  for (const entity of all) {
+    if (!entity.cells.length) continue;
+
+    const pCenter = entityCenter(entity);
+
+    if (
+      entity.id !== targetPlayer.id &&
+      Math.abs(pCenter.x - center.x) > visibleRadius &&
+      Math.abs(pCenter.y - center.y) > visibleRadius
+    ) {
+      continue;
+    }
+
+    visiblePlayers.push({
+      id: entity.id,
+      name: entity.name,
+      color: entity.color,
+      totalMass: Math.round(totalMass(entity)),
+      isBot: isBot(entity),
+      cells: entity.cells.map((c) => ({
+        x: c.x,
+        y: c.y,
+        mass: c.mass
+      }))
+    });
+  }
+
+  visiblePlayers.sort((a, b) => a.totalMass - b.totalMass);
+
+  return {
+    worldSize: WORLD_SIZE,
+    food: visibleFood,
+    viruses: visibleViruses,
+    players: visiblePlayers,
+    leaderboard: buildLeaderboard(),
+    wallet: getUserById.get(targetPlayer.userId)?.credits ?? 0,
+    debugPlayerCount: players.size,
+    debugBotCount: bots.length
+  };
+}
 
 io.on("connection", (socket) => {
+  console.log("socket connected:", socket.id);
+
   socket.on("join", (payload) => {
-    const sessionUser = getFreshSessionUser(socket.request);
-    const name = typeof payload === "string" ? payload : payload?.name;
-    const color = typeof payload === "object" ? payload?.color : null;
+    try {
+      const req = socket.request;
+      const sessionUser = req.session?.user;
 
-    const player = createPlayer(socket.id, name, sessionUser);
-    if (color) player.color = color;
+      if (!sessionUser?.id) {
+        socket.emit("joinError", { error: "You must be logged in." });
+        return;
+      }
 
-    players.set(socket.id, player);
+      const freshUser = getUserById.get(sessionUser.id);
+      if (!freshUser) {
+        socket.emit("joinError", { error: "User not found." });
+        return;
+      }
 
-    socket.emit("chatHistory", chatMessages);
-    addChatMessage("SERVER", `${player.name} joined the game`);
+      const existingSocketId = playerByUserId.get(freshUser.id);
+      if (
+        existingSocketId &&
+        existingSocketId !== socket.id &&
+        players.has(existingSocketId)
+      ) {
+        socket.emit("joinError", { error: "You are already in a match." });
+        return;
+      }
+
+      if (!req.session.gameEntryReady) {
+        socket.emit("joinError", {
+          error: "Enter the game from the menu first."
+        });
+        return;
+      }
+
+      const player = createHumanPlayer(socket.id, freshUser, payload);
+      players.set(socket.id, player);
+      playerByUserId.set(freshUser.id, socket.id);
+
+      req.session.gameEntryReady = false;
+      req.session.save(() => {});
+
+      socket.emit("chatHistory", chatMessages);
+      socket.emit("joined", { ok: true, id: socket.id });
+
+      addChatMessage("SERVER", `${player.name} joined the game`);
+    } catch (err) {
+      console.error("JOIN ERROR:", err);
+      socket.emit("joinError", { error: "Failed to join the match." });
+    }
   });
 
   socket.on("chat", (text) => {
@@ -907,48 +1079,70 @@ io.on("connection", (socket) => {
     const player = players.get(socket.id);
     if (!player) return;
 
-    if (typeof input.mouseX === "number") player.mouse.x = input.mouseX;
-    if (typeof input.mouseY === "number") player.mouse.y = input.mouseY;
-    if (input.split) player.wantsSplit = true;
-    if (input.eject) player.wantsEject = true;
+    if (typeof input?.mouseX === "number") player.mouse.x = input.mouseX;
+    if (typeof input?.mouseY === "number") player.mouse.y = input.mouseY;
+    if (input?.split) player.wantsSplit = true;
+    if (input?.eject) player.wantsEject = true;
   });
 
   socket.on("disconnect", () => {
     const player = players.get(socket.id);
+
     if (player) {
       addChatMessage("SERVER", `${player.name} left the game`);
+      players.delete(socket.id);
+
+      if (player.userId) {
+        playerByUserId.delete(player.userId);
+      }
     }
-    players.delete(socket.id);
+
+    if (socket.request?.session) {
+      socket.request.session.gameEntryReady = false;
+      socket.request.session.save(() => {});
+    }
+
+    console.log("socket disconnected:", socket.id);
   });
 });
 
+function tick() {
+  respawnMissingBots();
+
+  for (const bot of bots) {
+    botThink(bot);
+  }
+
+  for (const entity of [...players.values(), ...bots]) {
+    if (!entity.cells.length) continue;
+
+    moveEntity(entity);
+    splitEntity(entity);
+    ejectMass(entity);
+    handleFoodEating(entity);
+    handleVirusCollisions(entity);
+    handleSelfMerge(entity);
+  }
+
+  handleEntityVsEntity();
+
+  while (food.length < FOOD_COUNT) food.push(createFood());
+  while (viruses.length < VIRUS_COUNT) viruses.push(createVirus());
+  respawnMissingBots();
+
+  for (const [id, player] of players.entries()) {
+    const socket = io.sockets.sockets.get(id);
+    if (!socket) continue;
+    socket.volatile.emit("state", buildSnapshotFor(player));
+  }
+}
+
 resetWorldObjects();
-ensureBots();
+respawnMissingBots();
 
 setInterval(() => {
   try {
-    ensureBots();
-
-    for (const bot of bots.values()) {
-      updateBotAi(bot);
-    }
-
-    for (const entity of getAllEntities()) {
-      movePlayer(entity);
-      splitPlayer(entity);
-      ejectMass(entity);
-      handleFoodEating(entity);
-      handleVirusCollisions(entity);
-      handleSelfMerge(entity);
-    }
-
-    handlePlayerVsPlayer();
-
-    for (const [id, player] of players.entries()) {
-      const socket = io.sockets.sockets.get(id);
-      if (!socket) continue;
-      socket.volatile.emit("state", buildSnapshotFor(player));
-    }
+    tick();
   } catch (err) {
     console.error("GAME LOOP ERROR:", err);
   }
@@ -957,5 +1151,4 @@ setInterval(() => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
   console.log(`Using database: ${DB_PATH}`);
-  console.log(`Using data directory: ${DATA_DIR}`);
 });
