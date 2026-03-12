@@ -15,7 +15,8 @@ const io = new Server(server, {
   transports: ["websocket", "polling"]
 });
 
-const DATA_DIR = process.env.DATA_DIR || __dirname;
+const DEFAULT_DATA_DIR = fs.existsSync("/var/data") ? "/var/data" : __dirname;
+const DATA_DIR = process.env.DATA_DIR || DEFAULT_DATA_DIR;
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
@@ -23,6 +24,7 @@ const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "pipo.db");
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("synchronous = NORMAL");
+db.pragma("busy_timeout = 5000");
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -31,6 +33,22 @@ db.exec(`
     password_hash TEXT NOT NULL,
     credits REAL NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS credit_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    amount_eur REAL NOT NULL DEFAULT 0,
+    credits_delta REAL NOT NULL DEFAULT 0,
+    currency TEXT,
+    tx_reference TEXT,
+    status TEXT NOT NULL DEFAULT 'completed',
+    metadata_json TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
   )
 `);
 
@@ -52,6 +70,8 @@ const sessionMiddleware = session({
 });
 
 const PORT = process.env.PORT || 3000;
+const SOLANA_RECEIVE_ADDRESS = process.env.SOLANA_RECEIVE_ADDRESS || "";
+const EUR_TO_CREDITS = 1;
 
 app.use(express.json());
 app.use(sessionMiddleware);
@@ -152,10 +172,12 @@ function respawnCell() {
   };
 }
 
-function createPlayer(id, name) {
+function createPlayer(id, name, account = null) {
   return {
     id,
-    name: (name || "Player").slice(0, 16),
+    userId: account?.id || null,
+    username: account?.username || null,
+    name: (name || account?.username || "Player").slice(0, 16),
     color: randomColor(),
     mouse: { x: 0, y: 0 },
     wantsSplit: false,
@@ -259,76 +281,62 @@ function splitPlayer(player) {
   const newCells = [];
 
   for (const cell of player.cells) {
-    if (cell.mass < 36) continue;
-    if (player.cells.length + newCells.length >= MAX_CELLS) break;
+    if (cell.mass < 36 || player.cells.length + newCells.length >= MAX_CELLS) continue;
 
-    const childMass = cell.mass / 2;
-    cell.mass = childMass;
-    const r = radiusFromMass(childMass);
+    const newMass = cell.mass / 2;
+    cell.mass = newMass;
 
     newCells.push({
-      x: cell.x + dirX * (r * 2.2),
-      y: cell.y + dirY * (r * 2.2),
-      mass: childMass,
-      vx: dirX * 24,
-      vy: dirY * 24,
-      mergeTimer: 220
+      x: cell.x + dirX * radiusFromMass(newMass) * 2,
+      y: cell.y + dirY * radiusFromMass(newMass) * 2,
+      mass: newMass,
+      vx: dirX * 20,
+      vy: dirY * 20,
+      mergeTimer: 360
     });
-
-    cell.mergeTimer = 220;
   }
 
-  player.cells.push(...newCells);
+  if (newCells.length) {
+    player.cells.push(...newCells);
+  }
 }
 
 function ejectMass(player) {
   if (!player.wantsEject) return;
   player.wantsEject = false;
 
-  const len = Math.hypot(player.mouse.x, player.mouse.y) || 1;
-  const dirX = player.mouse.x / len;
-  const dirY = player.mouse.y / len;
-
   for (const cell of player.cells) {
-    if (cell.mass <= 20) continue;
+    if (cell.mass <= 26) continue;
+
     cell.mass -= 1;
+    const len = Math.hypot(player.mouse.x, player.mouse.y) || 1;
+    const dirX = player.mouse.x / len;
+    const dirY = player.mouse.y / len;
 
     food.push({
       id: Math.random().toString(36).slice(2),
-      x: cell.x + dirX * (radiusFromMass(cell.mass) + 20),
-      y: cell.y + dirY * (radiusFromMass(cell.mass) + 20),
+      x: cell.x + dirX * (radiusFromMass(cell.mass) + 16),
+      y: cell.y + dirY * (radiusFromMass(cell.mass) + 16),
       r: 8,
-      color: "#33c3ff",
-      mass: 1
+      color: player.color,
+      mass: 1,
+      vx: dirX * 16,
+      vy: dirY * 16
     });
   }
-}
-
-function removeFoodAt(index) {
-  const last = food.length - 1;
-  if (index !== last) {
-    food[index] = food[last];
-  }
-  food.pop();
 }
 
 function handleFoodEating(player) {
   for (const cell of player.cells) {
     const r = radiusFromMass(cell.mass);
-    const eatRadiusSq = (r + 8) * (r + 8);
+    const eatDistSq = (r + 10) * (r + 10);
 
     for (let i = food.length - 1; i >= 0; i--) {
       const f = food[i];
-      const dx = cell.x - f.x;
-      if (dx > FOOD_NEAR_CHECK || dx < -FOOD_NEAR_CHECK) continue;
-      const dy = cell.y - f.y;
-      if (dy > FOOD_NEAR_CHECK || dy < -FOOD_NEAR_CHECK) continue;
-      const dsq = dx * dx + dy * dy;
-      if (dsq > FOOD_NEAR_CHECK_SQ) continue;
-
-      if (dsq < eatRadiusSq) {
+      if (distanceSq(cell.x, cell.y, f.x, f.y) <= eatDistSq) {
         cell.mass += f.mass;
-        removeFoodAt(i);
+        food[i] = food[food.length - 1];
+        food.pop();
       }
     }
   }
@@ -336,107 +344,64 @@ function handleFoodEating(player) {
   while (food.length < FOOD_COUNT) {
     food.push(createFood());
   }
-}
 
-function splitByVirus(player, cellIndex, virusIndex) {
-  const cell = player.cells[cellIndex];
-  if (!cell) return;
-  if (player.cells.length >= MAX_CELLS) return;
+  for (const f of food) {
+    if (typeof f.vx === "number") {
+      f.x += f.vx;
+      f.y += f.vy;
+      f.vx *= 0.9;
+      f.vy *= 0.9;
 
-  const piecesWanted = Math.min(
-    MAX_CELLS - player.cells.length + 1,
-    Math.max(2, Math.min(8, Math.floor(cell.mass / 18)))
-  );
-
-  if (piecesWanted < 2) return;
-
-  const partMass = cell.mass / piecesWanted;
-  cell.mass = partMass;
-  cell.mergeTimer = 300;
-
-  for (let i = 1; i < piecesWanted; i++) {
-    const ang = (Math.PI * 2 * i) / piecesWanted;
-    player.cells.push({
-      x: cell.x + Math.cos(ang) * 20,
-      y: cell.y + Math.sin(ang) * 20,
-      mass: partMass,
-      vx: Math.cos(ang) * 18,
-      vy: Math.sin(ang) * 18,
-      mergeTimer: 300
-    });
+      if (f.vx * f.vx + f.vy * f.vy < 0.01) {
+        delete f.vx;
+        delete f.vy;
+      }
+    }
   }
-
-  viruses.splice(virusIndex, 1);
-  viruses.push(createVirus());
 }
 
 function handleVirusCollisions(player) {
-  for (let v = viruses.length - 1; v >= 0; v--) {
-    const virus = viruses[v];
+  for (const cell of [...player.cells]) {
+    const r = radiusFromMass(cell.mass);
 
-    for (let c = player.cells.length - 1; c >= 0; c--) {
-      const cell = player.cells[c];
-      const r = radiusFromMass(cell.mass);
+    for (const virus of viruses) {
+      const eatDist = r + virus.r * 0.6;
+      if (distanceSq(cell.x, cell.y, virus.x, virus.y) < eatDist * eatDist && cell.mass > 120) {
+        player.cells = player.cells.filter((c) => c !== cell);
 
-      if (cell.mass >= 36 && distanceSq(cell.x, cell.y, virus.x, virus.y) < (r - virus.r * 0.15) ** 2) {
-        splitByVirus(player, c, v);
+        const pieces = Math.min(8, MAX_CELLS - player.cells.length);
+        const baseMass = cell.mass / pieces;
+
+        for (let i = 0; i < pieces; i++) {
+          const angle = (Math.PI * 2 * i) / pieces;
+          player.cells.push({
+            x: cell.x + Math.cos(angle) * 20,
+            y: cell.y + Math.sin(angle) * 20,
+            mass: baseMass,
+            vx: Math.cos(angle) * 18,
+            vy: Math.sin(angle) * 18,
+            mergeTimer: 420
+          });
+        }
         break;
       }
     }
   }
 }
 
-function handlePlayerVsPlayer() {
-  const list = [...players.values()];
-
-  for (let i = 0; i < list.length; i++) {
-    for (let j = i + 1; j < list.length; j++) {
-      const a = list[i];
-      const b = list[j];
-
-      for (let ai = a.cells.length - 1; ai >= 0; ai--) {
-        const ac = a.cells[ai];
-        if (!ac) continue;
-
-        for (let bi = b.cells.length - 1; bi >= 0; bi--) {
-          const bc = b.cells[bi];
-          if (!bc) continue;
-
-          const ar = radiusFromMass(ac.mass);
-          const br = radiusFromMass(bc.mass);
-          const dsq = distanceSq(ac.x, ac.y, bc.x, bc.y);
-
-          if (ac.mass > bc.mass * 1.12 && dsq < (ar - br * 0.3) ** 2) {
-            ac.mass += bc.mass;
-            b.cells.splice(bi, 1);
-          } else if (bc.mass > ac.mass * 1.12 && dsq < (br - ar * 0.3) ** 2) {
-            bc.mass += ac.mass;
-            a.cells.splice(ai, 1);
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  for (const player of players.values()) {
-    if (player.cells.length === 0) {
-      player.cells.push(respawnCell());
-    }
-  }
-}
-
 function handleSelfMerge(player) {
-  if (player.cells.length <= 1) return;
-
   for (let i = 0; i < player.cells.length; i++) {
     for (let j = i + 1; j < player.cells.length; j++) {
       const a = player.cells[i];
       const b = player.cells[j];
-      const limit = Math.max(radiusFromMass(a.mass), radiusFromMass(b.mass)) * 0.6;
+      if (a.mergeTimer > 0 || b.mergeTimer > 0) continue;
 
-      if (a.mergeTimer <= 0 && b.mergeTimer <= 0 && distanceSq(a.x, a.y, b.x, b.y) < limit * limit) {
+      const dSq = distanceSq(a.x, a.y, b.x, b.y);
+      const rr = Math.max(radiusFromMass(a.mass), radiusFromMass(b.mass));
+      if (dSq < (rr * 0.8) * (rr * 0.8)) {
         a.mass += b.mass;
+        a.x = (a.x + b.x) / 2;
+        a.y = (a.y + b.y) / 2;
         player.cells.splice(j, 1);
         j--;
       }
@@ -444,58 +409,97 @@ function handleSelfMerge(player) {
   }
 }
 
+function handlePlayerVsPlayer() {
+  const all = [...players.values()];
+
+  for (let i = 0; i < all.length; i++) {
+    for (let j = i + 1; j < all.length; j++) {
+      const A = all[i];
+      const B = all[j];
+
+      for (const a of [...A.cells]) {
+        for (const b of [...B.cells]) {
+          const rA = radiusFromMass(a.mass);
+          const rB = radiusFromMass(b.mass);
+          const bigger = a.mass > b.mass * 1.15 ? a : b.mass > a.mass * 1.15 ? b : null;
+          const smaller = bigger === a ? b : bigger === b ? a : null;
+          if (!bigger || !smaller) continue;
+
+          const dSq = distanceSq(a.x, a.y, b.x, b.y);
+          const minEat = Math.max(rA, rB) * 0.9;
+
+          if (dSq < minEat * minEat) {
+            bigger.mass += smaller.mass;
+
+            if (smaller === a) {
+              A.cells = A.cells.filter((c) => c !== a);
+              if (!A.cells.length) {
+                A.cells = [respawnCell()];
+              }
+            } else {
+              B.cells = B.cells.filter((c) => c !== b);
+              if (!B.cells.length) {
+                B.cells = [respawnCell()];
+              }
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+}
+
 function buildLeaderboard() {
   return [...players.values()]
-    .map((p) => ({
-      name: p.name,
-      mass: Math.round(totalMass(p))
+    .map((player) => ({
+      id: player.id,
+      name: player.name,
+      totalMass: Math.round(totalMass(player))
     }))
-    .sort((a, b) => b.mass - a.mass)
+    .sort((a, b) => b.totalMass - a.totalMass)
     .slice(0, 10);
 }
 
-function buildSnapshotFor(targetPlayer) {
-  const center = playerCenter(targetPlayer);
-  const total = totalMass(targetPlayer);
-  const biggestCellMass = targetPlayer.cells.length
-    ? Math.max(...targetPlayer.cells.map((c) => c.mass))
-    : total;
-
-  const biggestRadius = radiusFromMass(biggestCellMass);
-  const visibleRadius = Math.max(1700, biggestRadius * 5.3 + SNAPSHOT_PADDING);
+function buildSnapshotFor(player) {
+  const center = playerCenter(player);
 
   const visibleFood = [];
-  for (const f of food) {
-    if (Math.abs(f.x - center.x) > visibleRadius) continue;
-    if (Math.abs(f.y - center.y) > visibleRadius) continue;
-    visibleFood.push(f);
-  }
-
   const visibleViruses = [];
-  for (const v of viruses) {
-    if (Math.abs(v.x - center.x) > visibleRadius) continue;
-    if (Math.abs(v.y - center.y) > visibleRadius) continue;
-    visibleViruses.push(v);
+  const visiblePlayers = [];
+
+  for (const f of food) {
+    if (distanceSq(f.x, f.y, center.x, center.y) <= (WORLD_SIZE * 0.18) * (WORLD_SIZE * 0.18) ||
+        distanceSq(f.x, f.y, center.x, center.y) <= FOOD_NEAR_CHECK_SQ) {
+      visibleFood.push({
+        id: f.id,
+        x: Math.round(f.x * 10) / 10,
+        y: Math.round(f.y * 10) / 10,
+        r: f.r,
+        color: f.color
+      });
+    }
   }
 
-  const visiblePlayers = [];
-  for (const p of players.values()) {
-    const pCenter = playerCenter(p);
+  for (const v of viruses) {
+    if (Math.abs(v.x - center.x) <= WORLD_SIZE * 0.25 && Math.abs(v.y - center.y) <= WORLD_SIZE * 0.25) {
+      visibleViruses.push(v);
+    }
+  }
 
-    if (
-      p.id !== targetPlayer.id &&
-      Math.abs(pCenter.x - center.x) > visibleRadius &&
-      Math.abs(pCenter.y - center.y) > visibleRadius
-    ) {
+  for (const other of players.values()) {
+    const otherCenter = playerCenter(other);
+    if (Math.abs(otherCenter.x - center.x) > WORLD_SIZE * 0.3 + SNAPSHOT_PADDING ||
+        Math.abs(otherCenter.y - center.y) > WORLD_SIZE * 0.3 + SNAPSHOT_PADDING) {
       continue;
     }
 
     visiblePlayers.push({
-      id: p.id,
-      name: p.name,
-      color: p.color,
-      totalMass: Math.round(totalMass(p)),
-      cells: p.cells.map((c) => ({
+      id: other.id,
+      name: other.name,
+      color: other.color,
+      totalMass: Math.round(totalMass(other)),
+      cells: other.cells.map((c) => ({
         x: Math.round(c.x * 10) / 10,
         y: Math.round(c.y * 10) / 10,
         mass: Math.round(c.mass * 10) / 10
@@ -518,6 +522,62 @@ function buildSnapshotFor(targetPlayer) {
 function getSessionUser(req) {
   return req.session.user || null;
 }
+
+function getFreshSessionUser(req) {
+  const sessionUser = getSessionUser(req);
+  if (!sessionUser?.id) return null;
+
+  const user = db.prepare("SELECT id, username, credits FROM users WHERE id = ?").get(sessionUser.id);
+  if (!user) return null;
+
+  req.session.user = {
+    id: user.id,
+    username: user.username,
+    credits: Number(user.credits || 0)
+  };
+
+  return req.session.user;
+}
+
+function requireAuth(req, res, next) {
+  const user = getFreshSessionUser(req);
+  if (!user) {
+    return res.status(401).json({ error: "You must be logged in." });
+  }
+  req.user = user;
+  next();
+}
+
+const addCreditsStmt = db.prepare(`
+  UPDATE users
+  SET credits = ROUND(credits + ?, 2)
+  WHERE id = ?
+`);
+
+const insertCreditTxStmt = db.prepare(`
+  INSERT INTO credit_transactions
+    (user_id, kind, amount_eur, credits_delta, currency, tx_reference, status, metadata_json)
+  VALUES
+    (?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+const getUserCreditsStmt = db.prepare("SELECT credits FROM users WHERE id = ?");
+
+const applyCreditChange = db.transaction((userId, creditsDelta, details = {}) => {
+  addCreditsStmt.run(creditsDelta, userId);
+  insertCreditTxStmt.run(
+    userId,
+    details.kind || "manual",
+    Number(details.amountEur || 0),
+    Number(creditsDelta || 0),
+    details.currency || null,
+    details.txReference || null,
+    details.status || "completed",
+    details.metadata ? JSON.stringify(details.metadata) : null
+  );
+  const row = getUserCreditsStmt.get(userId);
+  return Number(row?.credits || 0);
+});
 
 app.post("/api/register", async (req, res) => {
   try {
@@ -551,7 +611,7 @@ app.post("/api/register", async (req, res) => {
 
     res.json({
       ok: true,
-      user: getSessionUser(req)
+      user: getFreshSessionUser(req)
     });
   } catch (err) {
     console.error("REGISTER ERROR:", err);
@@ -580,12 +640,12 @@ app.post("/api/login", async (req, res) => {
     req.session.user = {
       id: user.id,
       username: user.username,
-      credits: user.credits || 0
+      credits: Number(user.credits || 0)
     };
 
     res.json({
       ok: true,
-      user: getSessionUser(req)
+      user: getFreshSessionUser(req)
     });
   } catch (err) {
     console.error("LOGIN ERROR:", err);
@@ -601,7 +661,118 @@ app.post("/api/logout", (req, res) => {
 
 app.get("/api/me", (req, res) => {
   res.json({
-    user: getSessionUser(req)
+    user: getFreshSessionUser(req)
+  });
+});
+
+app.get("/api/balance", requireAuth, (req, res) => {
+  res.json({
+    ok: true,
+    credits: req.user.credits
+  });
+});
+
+app.get("/api/credits/history", requireAuth, (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT id, kind, amount_eur, credits_delta, currency, tx_reference, status, created_at
+       FROM credit_transactions
+       WHERE user_id = ?
+       ORDER BY id DESC
+       LIMIT 50`
+    )
+    .all(req.user.id);
+
+  res.json({ ok: true, history: rows });
+});
+
+app.post("/api/credits/add", requireAuth, (req, res) => {
+  const amountEur = Number(req.body?.amountEur);
+  if (!Number.isFinite(amountEur) || amountEur <= 0) {
+    return res.status(400).json({ error: "amountEur must be a positive number." });
+  }
+
+  const creditsToAdd = Math.round(amountEur * EUR_TO_CREDITS * 100) / 100;
+  const credits = applyCreditChange(req.user.id, creditsToAdd, {
+    kind: "manual_topup",
+    amountEur,
+    currency: "EUR",
+    txReference: String(req.body?.txReference || "") || null,
+    metadata: {
+      source: "api_credits_add"
+    }
+  });
+
+  req.session.user.credits = credits;
+
+  res.json({
+    ok: true,
+    credits,
+    addedCredits: creditsToAdd
+  });
+});
+
+app.post("/api/credits/spend", requireAuth, (req, res) => {
+  const creditsToSpend = Number(req.body?.credits);
+  if (!Number.isFinite(creditsToSpend) || creditsToSpend <= 0) {
+    return res.status(400).json({ error: "credits must be a positive number." });
+  }
+
+  if (req.user.credits < creditsToSpend) {
+    return res.status(400).json({ error: "Not enough credits." });
+  }
+
+  const roundedSpend = Math.round(creditsToSpend * 100) / 100;
+  const credits = applyCreditChange(req.user.id, -roundedSpend, {
+    kind: "spend",
+    amountEur: 0,
+    currency: "CREDITS",
+    txReference: String(req.body?.reason || "") || null,
+    metadata: {
+      reason: String(req.body?.reason || "")
+    }
+  });
+
+  req.session.user.credits = credits;
+
+  res.json({
+    ok: true,
+    credits,
+    spentCredits: roundedSpend
+  });
+});
+
+app.post("/api/payments/solana/quote", requireAuth, (req, res) => {
+  const amountEur = Number(req.body?.amountEur);
+  if (!Number.isFinite(amountEur) || amountEur <= 0) {
+    return res.status(400).json({ error: "amountEur must be a positive number." });
+  }
+
+  const roundedEur = Math.round(amountEur * 100) / 100;
+  const credits = Math.round(roundedEur * EUR_TO_CREDITS * 100) / 100;
+  const reference = `pipo-${req.user.id}-${Date.now()}`;
+
+  insertCreditTxStmt.run(
+    req.user.id,
+    "solana_quote",
+    roundedEur,
+    0,
+    "EUR",
+    reference,
+    "pending",
+    JSON.stringify({
+      address: SOLANA_RECEIVE_ADDRESS || null,
+      note: "Awaiting on-chain confirmation"
+    })
+  );
+
+  res.json({
+    ok: true,
+    amountEur: roundedEur,
+    credits,
+    receiveAddress: SOLANA_RECEIVE_ADDRESS,
+    reference,
+    note: "Quote created. To credit balances automatically, add a Solana webhook/verification step."
   });
 });
 
@@ -611,20 +782,27 @@ app.get("/debug/players", (req, res) => {
     players: [...players.values()].map((p) => ({
       id: p.id,
       name: p.name,
+      userId: p.userId,
       totalMass: Math.round(totalMass(p)),
       cells: p.cells.length
     })),
     chatMessages: chatMessages.length,
-    dbPath: DB_PATH
+    dbPath: DB_PATH,
+    dataDir: DATA_DIR
   });
+});
+
+io.use((socket, next) => {
+  sessionMiddleware(socket.request, {}, next);
 });
 
 io.on("connection", (socket) => {
   socket.on("join", (payload) => {
-    const name = typeof payload === "string" ? payload : payload?.name;
+    const sessionUser = getFreshSessionUser(socket.request);
+    const requestedName = typeof payload === "string" ? payload : payload?.name;
     const color = typeof payload === "object" ? payload?.color : null;
 
-    const player = createPlayer(socket.id, name);
+    const player = createPlayer(socket.id, requestedName, sessionUser);
     if (color) player.color = color;
 
     players.set(socket.id, player);
@@ -686,4 +864,5 @@ setInterval(() => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
   console.log(`Using database: ${DB_PATH}`);
+  console.log(`Using data directory: ${DATA_DIR}`);
 });
