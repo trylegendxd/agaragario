@@ -3,10 +3,13 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const session = require("express-session");
+const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcryptjs");
 const { Pool } = require("pg");
 
 const app = express();
+app.set("trust proxy", 1);
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -25,10 +28,9 @@ if (!DATABASE_URL) {
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
-  ssl:
-    process.env.NODE_ENV === "production"
-      ? { rejectUnauthorized: false }
-      : false
+  ssl: process.env.NODE_ENV === "production"
+    ? { rejectUnauthorized: false }
+    : false
 });
 
 const WORLD_SIZE = 12000;
@@ -52,13 +54,19 @@ const bots = [];
 const chatMessages = [];
 
 const sessionMiddleware = session({
+  store: new PgSession({
+    pool,
+    tableName: "user_sessions",
+    createTableIfMissing: true
+  }),
   secret: process.env.SESSION_SECRET || "change-this-secret-in-production",
   resave: false,
   saveUninitialized: false,
+  rolling: true,
   cookie: {
     httpOnly: true,
     sameSite: "lax",
-    secure: false,
+    secure: process.env.NODE_ENV === "production",
     maxAge: 1000 * 60 * 60 * 24 * 14
   }
 });
@@ -247,7 +255,9 @@ async function getUserByUsername(username) {
     `,
     [username]
   );
+
   if (!rows[0]) return null;
+
   return {
     id: Number(rows[0].id),
     username: rows[0].username,
@@ -265,7 +275,9 @@ async function getUserById(id) {
     `,
     [id]
   );
+
   if (!rows[0]) return null;
+
   return {
     id: Number(rows[0].id),
     username: rows[0].username,
@@ -275,6 +287,7 @@ async function getUserById(id) {
 
 async function createUserWithBonus(username, passwordHash) {
   const client = await pool.connect();
+
   try {
     await client.query("BEGIN");
 
@@ -309,6 +322,7 @@ async function createUserWithBonus(username, passwordHash) {
 
 async function addCreditsTx(userId, amount, type, note) {
   const client = await pool.connect();
+
   try {
     await client.query("BEGIN");
 
@@ -316,6 +330,7 @@ async function addCreditsTx(userId, amount, type, note) {
       `SELECT id, credits FROM users WHERE id = $1 FOR UPDATE`,
       [userId]
     );
+
     if (!currentRes.rows[0]) {
       throw new Error("USER_NOT_FOUND");
     }
@@ -348,6 +363,7 @@ async function addCreditsTx(userId, amount, type, note) {
 
 async function spendCreditsTx(userId, amount, type, note) {
   const client = await pool.connect();
+
   try {
     await client.query("BEGIN");
 
@@ -355,6 +371,7 @@ async function spendCreditsTx(userId, amount, type, note) {
       `SELECT id, credits FROM users WHERE id = $1 FOR UPDATE`,
       [userId]
     );
+
     if (!currentRes.rows[0]) {
       throw new Error("USER_NOT_FOUND");
     }
@@ -413,6 +430,7 @@ async function requireAuth(req, res, next) {
     if (!user) {
       return res.status(401).json({ error: "You must be logged in." });
     }
+
     req.user = user;
     next();
   } catch (err) {
