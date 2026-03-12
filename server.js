@@ -36,6 +36,12 @@ db.exec(`
   )
 `);
 
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN credits REAL NOT NULL DEFAULT 0`);
+} catch (err) {
+  if (!String(err.message || "").includes("duplicate column name")) throw err;
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS credit_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,12 +57,6 @@ db.exec(`
     FOREIGN KEY (user_id) REFERENCES users(id)
   )
 `);
-
-try {
-  db.exec(`ALTER TABLE users ADD COLUMN credits REAL NOT NULL DEFAULT 0`);
-} catch (err) {
-  if (!String(err.message || "").includes("duplicate column name")) throw err;
-}
 
 const sessionMiddleware = session({
   secret: process.env.SESSION_SECRET || "change-this-secret-in-production",
@@ -91,8 +91,12 @@ const MAX_CELLS = 16;
 const SNAPSHOT_PADDING = 650;
 const FOOD_NEAR_CHECK = 160;
 const FOOD_NEAR_CHECK_SQ = FOOD_NEAR_CHECK * FOOD_NEAR_CHECK;
+const BOT_COUNT = 8;
+const BOT_VIEW_RADIUS = 2600;
+const BOT_NAMES = ["PIX", "MINT", "NOVA", "BLOB", "RIFT", "BYTE", "ZING", "GLOW"];
 
 const players = new Map();
+const bots = new Map();
 const food = [];
 const viruses = [];
 
@@ -162,9 +166,10 @@ function playerCenter(player) {
 }
 
 function respawnCell() {
+  const pad = WORLD_SIZE / 2 - 220;
   return {
-    x: rand(-150, 150),
-    y: rand(-150, 150),
+    x: rand(-pad, pad),
+    y: rand(-pad, pad),
     mass: 30,
     vx: 0,
     vy: 0,
@@ -182,8 +187,119 @@ function createPlayer(id, name, account = null) {
     mouse: { x: 0, y: 0 },
     wantsSplit: false,
     wantsEject: false,
+    isBot: false,
     cells: [respawnCell()]
   };
+}
+
+function createBot(id, name) {
+  return {
+    id,
+    userId: null,
+    username: null,
+    name: String(name || "Bot").slice(0, 16),
+    color: randomColor(),
+    mouse: { x: rand(-500, 500), y: rand(-500, 500) },
+    wantsSplit: false,
+    wantsEject: false,
+    isBot: true,
+    roamTimer: 0,
+    roamAngle: rand(0, Math.PI * 2),
+    cells: [respawnCell()]
+  };
+}
+
+function getAllEntities() {
+  return [...players.values(), ...bots.values()];
+}
+
+function respawnBot(bot) {
+  bot.color = randomColor();
+  bot.cells = [respawnCell()];
+  bot.mouse.x = rand(-500, 500);
+  bot.mouse.y = rand(-500, 500);
+  bot.wantsSplit = false;
+  bot.wantsEject = false;
+  bot.roamTimer = 0;
+}
+
+function ensureBots() {
+  while (bots.size < BOT_COUNT) {
+    const index = bots.size;
+    const id = `bot-${index + 1}`;
+    const name = `${BOT_NAMES[index % BOT_NAMES.length]}-${index + 1}`;
+    bots.set(id, createBot(id, name));
+  }
+}
+
+function updateBotAi(bot) {
+  const center = playerCenter(bot);
+  const myMass = totalMass(bot);
+  let fleeX = 0;
+  let fleeY = 0;
+  let fleePower = 0;
+  let chaseTarget = null;
+  let chaseDistSq = Infinity;
+
+  for (const player of players.values()) {
+    const pCenter = playerCenter(player);
+    const dx = center.x - pCenter.x;
+    const dy = center.y - pCenter.y;
+    const dSq = dx * dx + dy * dy + 1;
+    if (dSq > BOT_VIEW_RADIUS * BOT_VIEW_RADIUS) continue;
+    const weight = (BOT_VIEW_RADIUS * BOT_VIEW_RADIUS) / dSq;
+    fleeX += dx * weight;
+    fleeY += dy * weight;
+    fleePower += weight;
+  }
+
+  for (const other of bots.values()) {
+    if (other.id === bot.id) continue;
+    const otherCenter = playerCenter(other);
+    const dx = center.x - otherCenter.x;
+    const dy = center.y - otherCenter.y;
+    const dSq = dx * dx + dy * dy + 1;
+    if (dSq > BOT_VIEW_RADIUS * BOT_VIEW_RADIUS) continue;
+
+    const otherMass = totalMass(other);
+    if (myMass > otherMass * 1.18) {
+      if (dSq < chaseDistSq) {
+        chaseDistSq = dSq;
+        chaseTarget = otherCenter;
+      }
+    } else {
+      const weight = (BOT_VIEW_RADIUS * BOT_VIEW_RADIUS) / dSq;
+      fleeX += dx * weight;
+      fleeY += dy * weight;
+      fleePower += weight;
+    }
+  }
+
+  if (fleePower > 0.12) {
+    bot.mouse.x = fleeX;
+    bot.mouse.y = fleeY;
+    bot.wantsSplit = false;
+    return;
+  }
+
+  if (chaseTarget) {
+    bot.mouse.x = chaseTarget.x - center.x;
+    bot.mouse.y = chaseTarget.y - center.y;
+    if (myMass > 70 && chaseDistSq < 420 * 420 && bot.cells.length < MAX_CELLS) {
+      bot.wantsSplit = true;
+    }
+    return;
+  }
+
+  if (bot.roamTimer <= 0) {
+    bot.roamTimer = 40 + Math.floor(rand(0, 90));
+    bot.roamAngle = rand(0, Math.PI * 2);
+  } else {
+    bot.roamTimer--;
+  }
+
+  bot.mouse.x = Math.cos(bot.roamAngle) * 320;
+  bot.mouse.y = Math.sin(bot.roamAngle) * 320;
 }
 
 function addChatMessage(name, text) {
@@ -281,62 +397,76 @@ function splitPlayer(player) {
   const newCells = [];
 
   for (const cell of player.cells) {
-    if (cell.mass < 36 || player.cells.length + newCells.length >= MAX_CELLS) continue;
+    if (cell.mass < 36) continue;
+    if (player.cells.length + newCells.length >= MAX_CELLS) break;
 
-    const newMass = cell.mass / 2;
-    cell.mass = newMass;
+    const childMass = cell.mass / 2;
+    cell.mass = childMass;
+    const r = radiusFromMass(childMass);
 
     newCells.push({
-      x: cell.x + dirX * radiusFromMass(newMass) * 2,
-      y: cell.y + dirY * radiusFromMass(newMass) * 2,
-      mass: newMass,
-      vx: dirX * 20,
-      vy: dirY * 20,
-      mergeTimer: 360
+      x: cell.x + dirX * (r * 2.2),
+      y: cell.y + dirY * (r * 2.2),
+      mass: childMass,
+      vx: dirX * 24,
+      vy: dirY * 24,
+      mergeTimer: 220
     });
+
+    cell.mergeTimer = 220;
   }
 
-  if (newCells.length) {
-    player.cells.push(...newCells);
-  }
+  player.cells.push(...newCells);
 }
 
 function ejectMass(player) {
   if (!player.wantsEject) return;
   player.wantsEject = false;
 
-  for (const cell of player.cells) {
-    if (cell.mass <= 26) continue;
+  const len = Math.hypot(player.mouse.x, player.mouse.y) || 1;
+  const dirX = player.mouse.x / len;
+  const dirY = player.mouse.y / len;
 
+  for (const cell of player.cells) {
+    if (cell.mass <= 20) continue;
     cell.mass -= 1;
-    const len = Math.hypot(player.mouse.x, player.mouse.y) || 1;
-    const dirX = player.mouse.x / len;
-    const dirY = player.mouse.y / len;
 
     food.push({
       id: Math.random().toString(36).slice(2),
-      x: cell.x + dirX * (radiusFromMass(cell.mass) + 16),
-      y: cell.y + dirY * (radiusFromMass(cell.mass) + 16),
+      x: cell.x + dirX * (radiusFromMass(cell.mass) + 20),
+      y: cell.y + dirY * (radiusFromMass(cell.mass) + 20),
       r: 8,
-      color: player.color,
-      mass: 1,
-      vx: dirX * 16,
-      vy: dirY * 16
+      color: "#33c3ff",
+      mass: 1
     });
   }
+}
+
+function removeFoodAt(index) {
+  const last = food.length - 1;
+  if (index !== last) {
+    food[index] = food[last];
+  }
+  food.pop();
 }
 
 function handleFoodEating(player) {
   for (const cell of player.cells) {
     const r = radiusFromMass(cell.mass);
-    const eatDistSq = (r + 10) * (r + 10);
+    const eatRadiusSq = (r + 8) * (r + 8);
 
     for (let i = food.length - 1; i >= 0; i--) {
       const f = food[i];
-      if (distanceSq(cell.x, cell.y, f.x, f.y) <= eatDistSq) {
+      const dx = cell.x - f.x;
+      if (dx > FOOD_NEAR_CHECK || dx < -FOOD_NEAR_CHECK) continue;
+      const dy = cell.y - f.y;
+      if (dy > FOOD_NEAR_CHECK || dy < -FOOD_NEAR_CHECK) continue;
+      const dsq = dx * dx + dy * dy;
+      if (dsq > FOOD_NEAR_CHECK_SQ) continue;
+
+      if (dsq < eatRadiusSq) {
         cell.mass += f.mass;
-        food[i] = food[food.length - 1];
-        food.pop();
+        removeFoodAt(i);
       }
     }
   }
@@ -344,73 +474,58 @@ function handleFoodEating(player) {
   while (food.length < FOOD_COUNT) {
     food.push(createFood());
   }
+}
 
-  for (const f of food) {
-    if (typeof f.vx === "number") {
-      f.x += f.vx;
-      f.y += f.vy;
-      f.vx *= 0.9;
-      f.vy *= 0.9;
+function splitByVirus(player, cellIndex, virusIndex) {
+  const cell = player.cells[cellIndex];
+  if (!cell) return;
+  if (player.cells.length >= MAX_CELLS) return;
 
-      if (f.vx * f.vx + f.vy * f.vy < 0.01) {
-        delete f.vx;
-        delete f.vy;
-      }
-    }
+  const piecesWanted = Math.min(
+    MAX_CELLS - player.cells.length + 1,
+    Math.max(2, Math.min(8, Math.floor(cell.mass / 18)))
+  );
+
+  if (piecesWanted < 2) return;
+
+  const partMass = cell.mass / piecesWanted;
+  cell.mass = partMass;
+  cell.mergeTimer = 300;
+
+  for (let i = 1; i < piecesWanted; i++) {
+    const ang = (Math.PI * 2 * i) / piecesWanted;
+    player.cells.push({
+      x: cell.x + Math.cos(ang) * 20,
+      y: cell.y + Math.sin(ang) * 20,
+      mass: partMass,
+      vx: Math.cos(ang) * 18,
+      vy: Math.sin(ang) * 18,
+      mergeTimer: 300
+    });
   }
+
+  viruses.splice(virusIndex, 1);
+  viruses.push(createVirus());
 }
 
 function handleVirusCollisions(player) {
-  for (const cell of [...player.cells]) {
-    const r = radiusFromMass(cell.mass);
+  for (let v = viruses.length - 1; v >= 0; v--) {
+    const virus = viruses[v];
 
-    for (const virus of viruses) {
-      const eatDist = r + virus.r * 0.6;
-      if (distanceSq(cell.x, cell.y, virus.x, virus.y) < eatDist * eatDist && cell.mass > 120) {
-        player.cells = player.cells.filter((c) => c !== cell);
+    for (let c = player.cells.length - 1; c >= 0; c--) {
+      const cell = player.cells[c];
+      const r = radiusFromMass(cell.mass);
 
-        const pieces = Math.min(8, MAX_CELLS - player.cells.length);
-        const baseMass = cell.mass / pieces;
-
-        for (let i = 0; i < pieces; i++) {
-          const angle = (Math.PI * 2 * i) / pieces;
-          player.cells.push({
-            x: cell.x + Math.cos(angle) * 20,
-            y: cell.y + Math.sin(angle) * 20,
-            mass: baseMass,
-            vx: Math.cos(angle) * 18,
-            vy: Math.sin(angle) * 18,
-            mergeTimer: 420
-          });
-        }
+      if (cell.mass >= 36 && distanceSq(cell.x, cell.y, virus.x, virus.y) < (r - virus.r * 0.15) ** 2) {
+        splitByVirus(player, c, v);
         break;
       }
     }
   }
 }
 
-function handleSelfMerge(player) {
-  for (let i = 0; i < player.cells.length; i++) {
-    for (let j = i + 1; j < player.cells.length; j++) {
-      const a = player.cells[i];
-      const b = player.cells[j];
-      if (a.mergeTimer > 0 || b.mergeTimer > 0) continue;
-
-      const dSq = distanceSq(a.x, a.y, b.x, b.y);
-      const rr = Math.max(radiusFromMass(a.mass), radiusFromMass(b.mass));
-      if (dSq < (rr * 0.8) * (rr * 0.8)) {
-        a.mass += b.mass;
-        a.x = (a.x + b.x) / 2;
-        a.y = (a.y + b.y) / 2;
-        player.cells.splice(j, 1);
-        j--;
-      }
-    }
-  }
-}
-
 function handlePlayerVsPlayer() {
-  const all = [...players.values()];
+  const all = getAllEntities();
 
   for (let i = 0; i < all.length; i++) {
     for (let j = i + 1; j < all.length; j++) {
@@ -434,12 +549,14 @@ function handlePlayerVsPlayer() {
             if (smaller === a) {
               A.cells = A.cells.filter((c) => c !== a);
               if (!A.cells.length) {
-                A.cells = [respawnCell()];
+                if (A.isBot) respawnBot(A);
+                else A.cells = [respawnCell()];
               }
             } else {
               B.cells = B.cells.filter((c) => c !== b);
               if (!B.cells.length) {
-                B.cells = [respawnCell()];
+                if (B.isBot) respawnBot(B);
+                else B.cells = [respawnCell()];
               }
             }
             break;
@@ -448,58 +565,80 @@ function handlePlayerVsPlayer() {
       }
     }
   }
+
+  ensureBots();
+}
+
+function handleSelfMerge(player) {
+  if (player.cells.length <= 1) return;
+
+  for (let i = 0; i < player.cells.length; i++) {
+    for (let j = i + 1; j < player.cells.length; j++) {
+      const a = player.cells[i];
+      const b = player.cells[j];
+      const limit = Math.max(radiusFromMass(a.mass), radiusFromMass(b.mass)) * 0.6;
+
+      if (a.mergeTimer <= 0 && b.mergeTimer <= 0 && distanceSq(a.x, a.y, b.x, b.y) < limit * limit) {
+        a.mass += b.mass;
+        player.cells.splice(j, 1);
+        j--;
+      }
+    }
+  }
 }
 
 function buildLeaderboard() {
-  return [...players.values()]
-    .map((player) => ({
-      id: player.id,
-      name: player.name,
-      totalMass: Math.round(totalMass(player))
+  return getAllEntities()
+    .map((p) => ({
+      name: p.name,
+      mass: Math.round(totalMass(p))
     }))
-    .sort((a, b) => b.totalMass - a.totalMass)
+    .sort((a, b) => b.mass - a.mass)
     .slice(0, 10);
 }
 
-function buildSnapshotFor(player) {
-  const center = playerCenter(player);
+function buildSnapshotFor(targetPlayer) {
+  const center = playerCenter(targetPlayer);
+  const total = totalMass(targetPlayer);
+  const biggestCellMass = targetPlayer.cells.length
+    ? Math.max(...targetPlayer.cells.map((c) => c.mass))
+    : total;
+
+  const biggestRadius = radiusFromMass(biggestCellMass);
+  const visibleRadius = Math.max(1700, biggestRadius * 5.3 + SNAPSHOT_PADDING);
 
   const visibleFood = [];
-  const visibleViruses = [];
-  const visiblePlayers = [];
-
   for (const f of food) {
-    if (distanceSq(f.x, f.y, center.x, center.y) <= (WORLD_SIZE * 0.18) * (WORLD_SIZE * 0.18) ||
-        distanceSq(f.x, f.y, center.x, center.y) <= FOOD_NEAR_CHECK_SQ) {
-      visibleFood.push({
-        id: f.id,
-        x: Math.round(f.x * 10) / 10,
-        y: Math.round(f.y * 10) / 10,
-        r: f.r,
-        color: f.color
-      });
-    }
+    if (Math.abs(f.x - center.x) > visibleRadius) continue;
+    if (Math.abs(f.y - center.y) > visibleRadius) continue;
+    visibleFood.push(f);
   }
 
+  const visibleViruses = [];
   for (const v of viruses) {
-    if (Math.abs(v.x - center.x) <= WORLD_SIZE * 0.25 && Math.abs(v.y - center.y) <= WORLD_SIZE * 0.25) {
-      visibleViruses.push(v);
-    }
+    if (Math.abs(v.x - center.x) > visibleRadius) continue;
+    if (Math.abs(v.y - center.y) > visibleRadius) continue;
+    visibleViruses.push(v);
   }
 
-  for (const other of players.values()) {
-    const otherCenter = playerCenter(other);
-    if (Math.abs(otherCenter.x - center.x) > WORLD_SIZE * 0.3 + SNAPSHOT_PADDING ||
-        Math.abs(otherCenter.y - center.y) > WORLD_SIZE * 0.3 + SNAPSHOT_PADDING) {
+  const visiblePlayers = [];
+  for (const p of players.values()) {
+    const pCenter = playerCenter(p);
+
+    if (
+      p.id !== targetPlayer.id &&
+      Math.abs(pCenter.x - center.x) > visibleRadius &&
+      Math.abs(pCenter.y - center.y) > visibleRadius
+    ) {
       continue;
     }
 
     visiblePlayers.push({
-      id: other.id,
-      name: other.name,
-      color: other.color,
-      totalMass: Math.round(totalMass(other)),
-      cells: other.cells.map((c) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color,
+      totalMass: Math.round(totalMass(p)),
+      cells: p.cells.map((c) => ({
         x: Math.round(c.x * 10) / 10,
         y: Math.round(c.y * 10) / 10,
         mass: Math.round(c.mass * 10) / 10
@@ -515,7 +654,8 @@ function buildSnapshotFor(player) {
     viruses: visibleViruses,
     players: visiblePlayers,
     leaderboard: buildLeaderboard(),
-    debugPlayerCount: players.size
+    debugPlayerCount: players.size,
+    debugBotCount: bots.size
   };
 }
 
@@ -598,10 +738,7 @@ app.post("/api/register", async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
-
-    const result = db
-      .prepare("INSERT INTO users (username, password_hash, credits) VALUES (?, ?, ?)")
-      .run(username, passwordHash, 0);
+    const result = db.prepare("INSERT INTO users (username, password_hash, credits) VALUES (?, ?, ?)").run(username, passwordHash, 0);
 
     req.session.user = {
       id: result.lastInsertRowid,
@@ -609,10 +746,7 @@ app.post("/api/register", async (req, res) => {
       credits: 0
     };
 
-    res.json({
-      ok: true,
-      user: getFreshSessionUser(req)
-    });
+    res.json({ ok: true, user: getFreshSessionUser(req) });
   } catch (err) {
     console.error("REGISTER ERROR:", err);
     res.status(500).json({ error: "Failed to register." });
@@ -624,10 +758,7 @@ app.post("/api/login", async (req, res) => {
     const username = String(req.body?.username || "").trim();
     const password = String(req.body?.password || "");
 
-    const user = db
-      .prepare("SELECT id, username, password_hash, credits FROM users WHERE username = ?")
-      .get(username);
-
+    const user = db.prepare("SELECT id, username, password_hash, credits FROM users WHERE username = ?").get(username);
     if (!user) {
       return res.status(401).json({ error: "Invalid username or password." });
     }
@@ -643,10 +774,7 @@ app.post("/api/login", async (req, res) => {
       credits: Number(user.credits || 0)
     };
 
-    res.json({
-      ok: true,
-      user: getFreshSessionUser(req)
-    });
+    res.json({ ok: true, user: getFreshSessionUser(req) });
   } catch (err) {
     console.error("LOGIN ERROR:", err);
     res.status(500).json({ error: "Failed to log in." });
@@ -654,35 +782,19 @@ app.post("/api/login", async (req, res) => {
 });
 
 app.post("/api/logout", (req, res) => {
-  req.session.destroy(() => {
-    res.json({ ok: true });
-  });
+  req.session.destroy(() => res.json({ ok: true }));
 });
 
 app.get("/api/me", (req, res) => {
-  res.json({
-    user: getFreshSessionUser(req)
-  });
+  res.json({ user: getFreshSessionUser(req) });
 });
 
 app.get("/api/balance", requireAuth, (req, res) => {
-  res.json({
-    ok: true,
-    credits: req.user.credits
-  });
+  res.json({ ok: true, credits: req.user.credits });
 });
 
 app.get("/api/credits/history", requireAuth, (req, res) => {
-  const rows = db
-    .prepare(
-      `SELECT id, kind, amount_eur, credits_delta, currency, tx_reference, status, created_at
-       FROM credit_transactions
-       WHERE user_id = ?
-       ORDER BY id DESC
-       LIMIT 50`
-    )
-    .all(req.user.id);
-
+  const rows = db.prepare(`SELECT id, kind, amount_eur, credits_delta, currency, tx_reference, status, created_at FROM credit_transactions WHERE user_id = ? ORDER BY id DESC LIMIT 50`).all(req.user.id);
   res.json({ ok: true, history: rows });
 });
 
@@ -698,48 +810,40 @@ app.post("/api/credits/add", requireAuth, (req, res) => {
     amountEur,
     currency: "EUR",
     txReference: String(req.body?.txReference || "") || null,
-    metadata: {
-      source: "api_credits_add"
-    }
+    metadata: { source: "api_credits_add" }
   });
 
   req.session.user.credits = credits;
-
-  res.json({
-    ok: true,
-    credits,
-    addedCredits: creditsToAdd
-  });
+  res.json({ ok: true, credits, addedCredits: creditsToAdd });
 });
 
-app.post("/api/credits/spend", requireAuth, (req, res) => {
-  const creditsToSpend = Number(req.body?.credits);
-  if (!Number.isFinite(creditsToSpend) || creditsToSpend <= 0) {
-    return res.status(400).json({ error: "credits must be a positive number." });
+app.post("/api/credits/withdraw", requireAuth, (req, res) => {
+  const amountEur = Number(req.body?.amountEur ?? req.body?.credits);
+  const solanaAddress = String(req.body?.solanaAddress || "").trim();
+
+  if (!Number.isFinite(amountEur) || amountEur <= 0) {
+    return res.status(400).json({ error: "amountEur must be a positive number." });
+  }
+  if (solanaAddress.length < 20) {
+    return res.status(400).json({ error: "A valid Solana address is required." });
   }
 
-  if (req.user.credits < creditsToSpend) {
-    return res.status(400).json({ error: "Not enough credits." });
+  const roundedAmount = Math.round(amountEur * 100) / 100;
+  if (req.user.credits < roundedAmount) {
+    return res.status(400).json({ error: "Not enough wallet balance." });
   }
 
-  const roundedSpend = Math.round(creditsToSpend * 100) / 100;
-  const credits = applyCreditChange(req.user.id, -roundedSpend, {
-    kind: "spend",
-    amountEur: 0,
-    currency: "CREDITS",
-    txReference: String(req.body?.reason || "") || null,
-    metadata: {
-      reason: String(req.body?.reason || "")
-    }
+  const credits = applyCreditChange(req.user.id, -roundedAmount, {
+    kind: "withdrawal_request",
+    amountEur: roundedAmount,
+    currency: "SOL",
+    txReference: solanaAddress,
+    status: "pending_payout",
+    metadata: { solanaAddress, source: "api_credits_withdraw" }
   });
 
   req.session.user.credits = credits;
-
-  res.json({
-    ok: true,
-    credits,
-    spentCredits: roundedSpend
-  });
+  res.json({ ok: true, credits, requestedAmount: roundedAmount, status: "pending_payout" });
 });
 
 app.post("/api/payments/solana/quote", requireAuth, (req, res) => {
@@ -752,33 +856,15 @@ app.post("/api/payments/solana/quote", requireAuth, (req, res) => {
   const credits = Math.round(roundedEur * EUR_TO_CREDITS * 100) / 100;
   const reference = `pipo-${req.user.id}-${Date.now()}`;
 
-  insertCreditTxStmt.run(
-    req.user.id,
-    "solana_quote",
-    roundedEur,
-    0,
-    "EUR",
-    reference,
-    "pending",
-    JSON.stringify({
-      address: SOLANA_RECEIVE_ADDRESS || null,
-      note: "Awaiting on-chain confirmation"
-    })
-  );
+  insertCreditTxStmt.run(req.user.id, "solana_quote", roundedEur, 0, "EUR", reference, "pending", JSON.stringify({ address: SOLANA_RECEIVE_ADDRESS || null, note: "Awaiting on-chain confirmation" }));
 
-  res.json({
-    ok: true,
-    amountEur: roundedEur,
-    credits,
-    receiveAddress: SOLANA_RECEIVE_ADDRESS,
-    reference,
-    note: "Quote created. To credit balances automatically, add a Solana webhook/verification step."
-  });
+  res.json({ ok: true, amountEur: roundedEur, credits, receiveAddress: SOLANA_RECEIVE_ADDRESS, reference, note: "Quote created. To credit balances automatically, add a Solana webhook/verification step." });
 });
 
 app.get("/debug/players", (req, res) => {
   res.json({
     playerCount: players.size,
+    botCount: bots.size,
     players: [...players.values()].map((p) => ({
       id: p.id,
       name: p.name,
@@ -799,10 +885,10 @@ io.use((socket, next) => {
 io.on("connection", (socket) => {
   socket.on("join", (payload) => {
     const sessionUser = getFreshSessionUser(socket.request);
-    const requestedName = typeof payload === "string" ? payload : payload?.name;
+    const name = typeof payload === "string" ? payload : payload?.name;
     const color = typeof payload === "object" ? payload?.color : null;
 
-    const player = createPlayer(socket.id, requestedName, sessionUser);
+    const player = createPlayer(socket.id, name, sessionUser);
     if (color) player.color = color;
 
     players.set(socket.id, player);
@@ -837,16 +923,23 @@ io.on("connection", (socket) => {
 });
 
 resetWorldObjects();
+ensureBots();
 
 setInterval(() => {
   try {
-    for (const player of players.values()) {
-      movePlayer(player);
-      splitPlayer(player);
-      ejectMass(player);
-      handleFoodEating(player);
-      handleVirusCollisions(player);
-      handleSelfMerge(player);
+    ensureBots();
+
+    for (const bot of bots.values()) {
+      updateBotAi(bot);
+    }
+
+    for (const entity of getAllEntities()) {
+      movePlayer(entity);
+      splitPlayer(entity);
+      ejectMass(entity);
+      handleFoodEating(entity);
+      handleVirusCollisions(entity);
+      handleSelfMerge(entity);
     }
 
     handlePlayerVsPlayer();
