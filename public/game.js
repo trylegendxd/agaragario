@@ -131,6 +131,24 @@ function formatMoney(value) {
   return `$${num.toFixed(2)}`;
 }
 
+function showLandingOnly() {
+  if (landingScreen) landingScreen.classList.remove("hidden");
+  if (authPanel) authPanel.classList.add("hidden");
+  if (menu) menu.classList.add("hidden");
+}
+
+function showLandingWithAuth() {
+  if (landingScreen) landingScreen.classList.remove("hidden");
+  if (authPanel) authPanel.classList.remove("hidden");
+  if (menu) menu.classList.add("hidden");
+}
+
+function showMenu() {
+  if (landingScreen) landingScreen.classList.add("hidden");
+  if (authPanel) authPanel.classList.add("hidden");
+  if (menu) menu.classList.remove("hidden");
+}
+
 function updateWalletUi(wallet) {
   state.wallet = Number(wallet || 0);
   if (walletValue) walletValue.textContent = formatMoney(state.wallet);
@@ -202,7 +220,7 @@ function updateAuthUi(user) {
     setAuthStatus("Not logged in.", false);
     setMenuStatus("");
     setWalletStatus("");
-    showLandingWithAuth();
+    showLandingOnly();
   }
 }
 
@@ -922,3 +940,4 @@ spawnMoneySigns(menuMoneyBg, 28);
 checkSession();
 loop();
 setPlayButtonState(false);
+
