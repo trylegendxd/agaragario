@@ -369,3 +369,30 @@ canvas {
   color: #555;
   min-height: 18px;
 }
+
+
+.balanceBox {
+  position: fixed;
+  left: 16px;
+  bottom: 118px;
+  min-width: 118px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #d5d5d5;
+  border-radius: 4px;
+  padding: 8px 10px 6px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.08);
+}
+
+.balanceValue {
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 700;
+  color: #2f7d32;
+}
+
+.authBalance {
+  margin-top: 10px;
+  color: #2f7d32;
+  font-size: 14px;
+  font-weight: 700;
+}
