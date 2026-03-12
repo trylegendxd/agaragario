@@ -1,4 +1,5 @@
 const path = require("path");
+const fs = require("fs");
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -7,19 +8,37 @@ const Database = require("better-sqlite3");
 const bcrypt = require("bcryptjs");
 
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
+app.set("trust proxy", 1);
 
-const db = new Database("pipo.db");
+const server = http.createServer(app);
+const io = new Server(server, {
+  transports: ["websocket", "polling"]
+});
+
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "pipo.db");
+const db = new Database(DB_PATH);
+db.pragma("journal_mode = WAL");
+db.pragma("synchronous = NORMAL");
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    credits REAL NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )
 `);
+
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN credits REAL NOT NULL DEFAULT 0`);
+} catch (err) {
+  if (!String(err.message || "").includes("duplicate column name")) throw err;
+}
 
 const sessionMiddleware = session({
   secret: process.env.SESSION_SECRET || "change-this-secret-in-production",
@@ -28,7 +47,7 @@ const sessionMiddleware = session({
   cookie: {
     httpOnly: true,
     sameSite: "lax",
-    secure: false
+    secure: process.env.NODE_ENV === "production"
   }
 });
 
@@ -36,14 +55,16 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(sessionMiddleware);
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(__dirname));
 
 const WORLD_SIZE = 12000;
-const FOOD_COUNT = 1000;
+const FOOD_COUNT = 3000;
 const VIRUS_COUNT = 35;
-const TICK_RATE = 35;
+const TICK_RATE = 45;
 const MAX_CELLS = 16;
-const SNAPSHOT_PADDING = 800;
+const SNAPSHOT_PADDING = 650;
+const FOOD_NEAR_CHECK = 160;
+const FOOD_NEAR_CHECK_SQ = FOOD_NEAR_CHECK * FOOD_NEAR_CHECK;
 
 const players = new Map();
 const food = [];
@@ -60,8 +81,10 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function distance(ax, ay, bx, by) {
-  return Math.hypot(ax - bx, ay - by);
+function distanceSq(ax, ay, bx, by) {
+  const dx = ax - bx;
+  const dy = ay - by;
+  return dx * dx + dy * dy;
 }
 
 function radiusFromMass(mass) {
@@ -172,17 +195,17 @@ function resetWorldObjects() {
 
 function movePlayer(player) {
   for (const cell of player.cells) {
-    const speed = 2.6 / Math.pow(cell.mass, 0.16);
+    const speed = 3.1 / Math.pow(cell.mass, 0.16);
     const len = Math.hypot(player.mouse.x, player.mouse.y) || 1;
     const dirX = player.mouse.x / len;
     const dirY = player.mouse.y / len;
-    const distFactor = Math.min(len / 220, 1);
+    const distFactor = Math.min(len / 180, 1);
 
     cell.vx += dirX * speed * distFactor;
     cell.vy += dirY * speed * distFactor;
 
-    cell.vx *= 0.88;
-    cell.vy *= 0.88;
+    cell.vx *= 0.84;
+    cell.vy *= 0.84;
 
     cell.x += cell.vx;
     cell.y += cell.vy;
@@ -200,7 +223,7 @@ function movePlayer(player) {
       const minD = (radiusFromMass(a.mass) + radiusFromMass(b.mass)) * 0.55;
 
       if (d < minD) {
-        const push = (minD - d) * 0.08;
+        const push = (minD - d) * 0.1;
         a.x -= (dx / d) * push;
         a.y -= (dy / d) * push;
         b.x += (dx / d) * push;
@@ -241,8 +264,8 @@ function splitPlayer(player) {
       x: cell.x + dirX * (r * 2.2),
       y: cell.y + dirY * (r * 2.2),
       mass: childMass,
-      vx: dirX * 22,
-      vy: dirY * 22,
+      vx: dirX * 24,
+      vy: dirY * 24,
       mergeTimer: 220
     });
 
@@ -275,17 +298,31 @@ function ejectMass(player) {
   }
 }
 
+function removeFoodAt(index) {
+  const last = food.length - 1;
+  if (index !== last) {
+    food[index] = food[last];
+  }
+  food.pop();
+}
+
 function handleFoodEating(player) {
   for (const cell of player.cells) {
     const r = radiusFromMass(cell.mass);
+    const eatRadiusSq = (r + 8) * (r + 8);
 
     for (let i = food.length - 1; i >= 0; i--) {
       const f = food[i];
-      if (Math.abs(cell.x - f.x) > 120 || Math.abs(cell.y - f.y) > 120) continue;
+      const dx = cell.x - f.x;
+      if (dx > FOOD_NEAR_CHECK || dx < -FOOD_NEAR_CHECK) continue;
+      const dy = cell.y - f.y;
+      if (dy > FOOD_NEAR_CHECK || dy < -FOOD_NEAR_CHECK) continue;
+      const dsq = dx * dx + dy * dy;
+      if (dsq > FOOD_NEAR_CHECK_SQ) continue;
 
-      if (distance(cell.x, cell.y, f.x, f.y) < r + f.r) {
+      if (dsq < eatRadiusSq) {
         cell.mass += f.mass;
-        food.splice(i, 1);
+        removeFoodAt(i);
       }
     }
   }
@@ -335,7 +372,7 @@ function handleVirusCollisions(player) {
       const cell = player.cells[c];
       const r = radiusFromMass(cell.mass);
 
-      if (cell.mass >= 36 && distance(cell.x, cell.y, virus.x, virus.y) < r - virus.r * 0.15) {
+      if (cell.mass >= 36 && distanceSq(cell.x, cell.y, virus.x, virus.y) < (r - virus.r * 0.15) ** 2) {
         splitByVirus(player, c, v);
         break;
       }
@@ -361,12 +398,12 @@ function handlePlayerVsPlayer() {
 
           const ar = radiusFromMass(ac.mass);
           const br = radiusFromMass(bc.mass);
-          const d = distance(ac.x, ac.y, bc.x, bc.y);
+          const dsq = distanceSq(ac.x, ac.y, bc.x, bc.y);
 
-          if (ac.mass > bc.mass * 1.12 && d < ar - br * 0.3) {
+          if (ac.mass > bc.mass * 1.12 && dsq < (ar - br * 0.3) ** 2) {
             ac.mass += bc.mass;
             b.cells.splice(bi, 1);
-          } else if (bc.mass > ac.mass * 1.12 && d < br - ar * 0.3) {
+          } else if (bc.mass > ac.mass * 1.12 && dsq < (br - ar * 0.3) ** 2) {
             bc.mass += ac.mass;
             a.cells.splice(ai, 1);
             break;
@@ -390,9 +427,9 @@ function handleSelfMerge(player) {
     for (let j = i + 1; j < player.cells.length; j++) {
       const a = player.cells[i];
       const b = player.cells[j];
-      const d = distance(a.x, a.y, b.x, b.y);
+      const limit = Math.max(radiusFromMass(a.mass), radiusFromMass(b.mass)) * 0.6;
 
-      if (a.mergeTimer <= 0 && b.mergeTimer <= 0 && d < Math.max(radiusFromMass(a.mass), radiusFromMass(b.mass)) * 0.6) {
+      if (a.mergeTimer <= 0 && b.mergeTimer <= 0 && distanceSq(a.x, a.y, b.x, b.y) < limit * limit) {
         a.mass += b.mass;
         player.cells.splice(j, 1);
         j--;
@@ -419,7 +456,7 @@ function buildSnapshotFor(targetPlayer) {
     : total;
 
   const biggestRadius = radiusFromMass(biggestCellMass);
-  const visibleRadius = Math.max(2200, biggestRadius * 6 + SNAPSHOT_PADDING);
+  const visibleRadius = Math.max(1700, biggestRadius * 5.3 + SNAPSHOT_PADDING);
 
   const visibleFood = [];
   for (const f of food) {
@@ -453,9 +490,9 @@ function buildSnapshotFor(targetPlayer) {
       color: p.color,
       totalMass: Math.round(totalMass(p)),
       cells: p.cells.map((c) => ({
-        x: c.x,
-        y: c.y,
-        mass: c.mass
+        x: Math.round(c.x * 10) / 10,
+        y: Math.round(c.y * 10) / 10,
+        mass: Math.round(c.mass * 10) / 10
       }))
     });
   }
@@ -470,6 +507,10 @@ function buildSnapshotFor(targetPlayer) {
     leaderboard: buildLeaderboard(),
     debugPlayerCount: players.size
   };
+}
+
+function getSessionUser(req) {
+  return req.session.user || null;
 }
 
 app.post("/api/register", async (req, res) => {
@@ -493,17 +534,18 @@ app.post("/api/register", async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 12);
 
     const result = db
-      .prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)")
-      .run(username, passwordHash);
+      .prepare("INSERT INTO users (username, password_hash, credits) VALUES (?, ?, ?)")
+      .run(username, passwordHash, 0);
 
     req.session.user = {
       id: result.lastInsertRowid,
-      username
+      username,
+      credits: 0
     };
 
     res.json({
       ok: true,
-      user: req.session.user
+      user: getSessionUser(req)
     });
   } catch (err) {
     console.error("REGISTER ERROR:", err);
@@ -517,7 +559,7 @@ app.post("/api/login", async (req, res) => {
     const password = String(req.body?.password || "");
 
     const user = db
-      .prepare("SELECT id, username, password_hash FROM users WHERE username = ?")
+      .prepare("SELECT id, username, password_hash, credits FROM users WHERE username = ?")
       .get(username);
 
     if (!user) {
@@ -531,12 +573,13 @@ app.post("/api/login", async (req, res) => {
 
     req.session.user = {
       id: user.id,
-      username: user.username
+      username: user.username,
+      credits: user.credits || 0
     };
 
     res.json({
       ok: true,
-      user: req.session.user
+      user: getSessionUser(req)
     });
   } catch (err) {
     console.error("LOGIN ERROR:", err);
@@ -552,7 +595,7 @@ app.post("/api/logout", (req, res) => {
 
 app.get("/api/me", (req, res) => {
   res.json({
-    user: req.session.user || null
+    user: getSessionUser(req)
   });
 });
 
@@ -565,13 +608,12 @@ app.get("/debug/players", (req, res) => {
       totalMass: Math.round(totalMass(p)),
       cells: p.cells.length
     })),
-    chatMessages: chatMessages.length
+    chatMessages: chatMessages.length,
+    dbPath: DB_PATH
   });
 });
 
 io.on("connection", (socket) => {
-  console.log("socket connected:", socket.id);
-
   socket.on("join", (payload) => {
     const name = typeof payload === "string" ? payload : payload?.name;
     const color = typeof payload === "object" ? payload?.color : null;
@@ -580,7 +622,6 @@ io.on("connection", (socket) => {
     if (color) player.color = color;
 
     players.set(socket.id, player);
-    console.log("joined:", socket.id, name, "total players:", players.size);
 
     socket.emit("chatHistory", chatMessages);
     addChatMessage("SERVER", `${player.name} joined the game`);
@@ -608,7 +649,6 @@ io.on("connection", (socket) => {
       addChatMessage("SERVER", `${player.name} left the game`);
     }
     players.delete(socket.id);
-    console.log("disconnected:", socket.id, "total players:", players.size);
   });
 });
 
@@ -630,7 +670,7 @@ setInterval(() => {
     for (const [id, player] of players.entries()) {
       const socket = io.sockets.sockets.get(id);
       if (!socket) continue;
-      socket.emit("state", buildSnapshotFor(player));
+      socket.volatile.emit("state", buildSnapshotFor(player));
     }
   } catch (err) {
     console.error("GAME LOOP ERROR:", err);
@@ -639,4 +679,5 @@ setInterval(() => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
+  console.log(`Using database: ${DB_PATH}`);
 });
