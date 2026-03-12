@@ -41,6 +41,7 @@ const menuStatus = document.getElementById("menuStatus");
 
 let W = (canvas.width = window.innerWidth);
 let H = (canvas.height = window.innerHeight);
+let isIntentionalReconnect = false;
 
 window.addEventListener("resize", () => {
   W = canvas.width = window.innerWidth;
@@ -115,11 +116,14 @@ function waitForSocketConnect(timeoutMs = 4000) {
 }
 
 async function reconnectSocketAfterAuth() {
+  isIntentionalReconnect = true;
+
   if (socket.connected) {
     socket.disconnect();
   }
 
   await waitForSocketConnect();
+  isIntentionalReconnect = false;
 }
 
 function escapeHtml(text) {
@@ -897,6 +901,10 @@ socket.on("disconnect", () => {
   setPlayButtonState(false);
   resetGameVisualState();
 
+  if (isIntentionalReconnect) {
+    return;
+  }
+
   if (currentUser) {
     showMenu();
     setMenuStatus("Connection lost. Back in menu.", true);
@@ -996,6 +1004,7 @@ spawnMoneySigns(menuMoneyBg, 28);
 checkSession();
 loop();
 setPlayButtonState(false);
+
 
 
 
