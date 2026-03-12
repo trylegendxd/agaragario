@@ -8,12 +8,6 @@ const startMenuBtn = document.getElementById("startMenuBtn");
 const colorInput = document.getElementById("colorInput");
 const moneyBg = document.getElementById("moneyBg");
 const menuMoneyBg = document.getElementById("menuMoneyBg");
-const walletValue = document.getElementById("walletValue");
-const walletAmountInput = document.getElementById("walletAmountInput");
-const withdrawAddressInput = document.getElementById("withdrawAddressInput");
-const addBalanceBtn = document.getElementById("addBalanceBtn");
-const withdrawBtn = document.getElementById("withdrawBtn");
-const walletStatus = document.getElementById("walletStatus");
 
 const menu = document.getElementById("menu");
 const playBtn = document.getElementById("playBtn");
@@ -59,14 +53,14 @@ const state = {
 };
 
 const snapshots = [];
-const INTERPOLATION_DELAY = 12;
+const INTERPOLATION_DELAY = 16;
 const INPUT_SEND_RATE = 90;
-let hudFrameCounter = 0;
+let isJoinInFlight = false;
+let inMatch = false;
 
 let chatOpen = false;
 const chatMessages = [];
 let currentUser = null;
-let balanceRequestInFlight = false;
 
 function radiusFromMass(mass) {
   return Math.sqrt(mass) * 4.8;
@@ -102,33 +96,10 @@ function setAuthStatus(text, isError = false) {
   authStatus.style.color = isError ? "#c62828" : "#2e7d32";
 }
 
-
-function setWalletStatus(text, isError = false) {
-  if (!walletStatus) return;
-  walletStatus.textContent = text || "";
-  walletStatus.style.color = isError ? "#c62828" : "#2e7d32";
-}
-
-function updateBalanceUi() {
-  const credits = currentUser ? Number(currentUser.credits || 0) : 0;
-  const pretty = credits.toFixed(2);
-  if (walletValue) walletValue.textContent = `$${pretty}`;
-}
-
-async function refreshBalance() {
-  if (!currentUser || balanceRequestInFlight) return;
-  balanceRequestInFlight = true;
-  try {
-    const data = await api("/api/balance");
-    if (data && typeof data.credits === "number") {
-      currentUser.credits = data.credits;
-      updateBalanceUi();
-    }
-  } catch (err) {
-    console.error("BALANCE REFRESH ERROR:", err);
-  } finally {
-    balanceRequestInFlight = false;
-  }
+function setPlayButtonState(busy = false) {
+  if (!playBtn) return;
+  playBtn.disabled = busy;
+  playBtn.textContent = busy ? "Loading..." : "Enter Game";
 }
 
 function updateAuthUi(user) {
@@ -145,18 +116,18 @@ function updateAuthUi(user) {
 
     if (authPanel) authPanel.style.display = "none";
     if (landingScreen) landingScreen.style.display = "none";
-    if (menu) menu.style.display = "flex";
-    setWalletStatus("");
+    menu.style.display = "flex";
+    setPlayButtonState(false);
   } else {
     setAuthStatus("Not logged in.", false);
 
     if (authPassword) authPassword.value = "";
     if (authPanel) authPanel.style.display = "none";
     if (landingScreen) landingScreen.style.display = "flex";
-    if (menu) menu.style.display = "none";
-    if (walletAmountInput) walletAmountInput.value = "";
-    if (withdrawAddressInput) withdrawAddressInput.value = "";
-    setWalletStatus("");
+    menu.style.display = "none";
+    setPlayButtonState(false);
+    isJoinInFlight = false;
+    inMatch = false;
   }
 }
 
@@ -315,8 +286,7 @@ function drawGrid() {
 }
 
 function drawFood() {
-  for (let i = 0; i < state.food.length; i++) {
-    const f = state.food[i];
+  for (const f of state.food) {
     const s = worldToScreen(f.x, f.y);
     const rr = f.r * state.zoom;
 
@@ -330,8 +300,7 @@ function drawFood() {
 }
 
 function drawViruses() {
-  for (let i = 0; i < state.viruses.length; i++) {
-    const virus = state.viruses[i];
+  for (const virus of state.viruses) {
     const s = worldToScreen(virus.x, virus.y);
     const rr = virus.r * state.zoom;
 
@@ -366,8 +335,7 @@ function drawPlayers() {
     return am - bm;
   });
 
-  for (let pi = 0; pi < sorted.length; pi++) {
-    const player = sorted[pi];
+  for (const player of sorted) {
     for (const cell of player.cells) {
       const s = worldToScreen(cell.x, cell.y);
       const r = radiusFromMass(cell.mass) * state.zoom;
@@ -441,9 +409,6 @@ function drawMinimap() {
 }
 
 function updateHud() {
-  hudFrameCounter++;
-  if (hudFrameCounter % 4 !== 0) return;
-
   massValue.textContent = Math.floor(getMyTotalMass());
   leaderboardEntries.innerHTML = state.leaderboard
     .map((entry, i) => `<div>${i + 1}. ${entry.name} - ${entry.mass}</div>`)
@@ -451,7 +416,8 @@ function updateHud() {
 }
 
 function render() {
-  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
   drawGrid();
   drawFood();
   drawViruses();
@@ -549,6 +515,7 @@ window.addEventListener("keydown", (e) => {
   }
 
   if (chatOpen) return;
+  if (!inMatch) return;
 
   if (e.code === "Space") {
     e.preventDefault();
@@ -560,14 +527,40 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-function joinGame() {
-  socket.emit("join", {
-    name: nameInput.value.trim() || "Player",
-    color: colorInput ? colorInput.value : "#33c3ff"
-  });
+async function joinGame() {
+  if (isJoinInFlight || inMatch) return;
+  if (!currentUser) {
+    setAuthStatus("You must log in first.", true);
+    return;
+  }
 
-  menu.style.display = "none";
-  setChatOpen(false);
+  isJoinInFlight = true;
+  setPlayButtonState(true);
+
+  try {
+    const data = await api("/api/game/start", {});
+    if (data.error) {
+      if (data.user) updateAuthUi(data.user);
+      setAuthStatus(data.error, true);
+      return;
+    }
+
+    if (data.user) updateAuthUi(data.user);
+
+    socket.emit("join", {
+      name: nameInput.value.trim() || "Player",
+      color: colorInput ? colorInput.value : "#33c3ff"
+    });
+
+    menu.style.display = "none";
+    setChatOpen(false);
+    inMatch = true;
+  } catch (err) {
+    setAuthStatus("Failed to start match.", true);
+  } finally {
+    isJoinInFlight = false;
+    if (!inMatch) setPlayButtonState(false);
+  }
 }
 
 playBtn.addEventListener("click", joinGame);
@@ -615,7 +608,6 @@ if (registerBtn) {
     }
 
     updateAuthUi(data.user);
-    updateBalanceUi();
   });
 }
 
@@ -631,7 +623,6 @@ if (loginBtn) {
     }
 
     updateAuthUi(data.user);
-    updateBalanceUi();
   });
 }
 
@@ -642,74 +633,15 @@ if (logoutBtn) {
   });
 }
 
-
-if (addBalanceBtn) {
-  addBalanceBtn.addEventListener("click", async () => {
-    if (!currentUser) {
-      setWalletStatus("Log in first.", true);
-      return;
-    }
-
-    const amountEur = Number(walletAmountInput?.value);
-    if (!Number.isFinite(amountEur) || amountEur <= 0) {
-      setWalletStatus("Enter a valid positive amount.", true);
-      return;
-    }
-
-    const data = await api("/api/credits/add", { amountEur });
-    if (data.error) {
-      setWalletStatus(data.error, true);
-      return;
-    }
-
-    currentUser.credits = data.credits;
-    updateBalanceUi();
-    if (walletAmountInput) walletAmountInput.value = "";
-    setWalletStatus(`Added $${Number(data.addedCredits || 0).toFixed(2)} to wallet.`);
-  });
-}
-
-if (withdrawBtn) {
-  withdrawBtn.addEventListener("click", async () => {
-    if (!currentUser) {
-      setWalletStatus("Log in first.", true);
-      return;
-    }
-
-    const amountEur = Number(walletAmountInput?.value);
-    const solanaAddress = String(withdrawAddressInput?.value || "").trim();
-
-    if (!Number.isFinite(amountEur) || amountEur <= 0) {
-      setWalletStatus("Enter a valid withdrawal amount.", true);
-      return;
-    }
-
-    if (solanaAddress.length < 20) {
-      setWalletStatus("Enter a valid Solana address.", true);
-      return;
-    }
-
-    const data = await api("/api/credits/withdraw", { amountEur, solanaAddress });
-    if (data.error) {
-      setWalletStatus(data.error, true);
-      return;
-    }
-
-    currentUser.credits = data.credits;
-    updateBalanceUi();
-    if (walletAmountInput) walletAmountInput.value = "";
-    setWalletStatus(`Withdrawal requested for $${Number(data.requestedAmount || 0).toFixed(2)}.`);
-  });
-}
-
 socket.on("connect", () => {
   state.connected = true;
   state.myId = socket.id;
-  refreshBalance();
 });
 
 socket.on("disconnect", () => {
   state.connected = false;
+  inMatch = false;
+  setPlayButtonState(false);
 });
 
 socket.on("chatHistory", (history) => {
@@ -730,7 +662,7 @@ socket.on("state", (serverState) => {
     state: cloneStateForSnapshot(serverState)
   });
 
-  while (snapshots.length > 6) {
+  while (snapshots.length > 10) {
     snapshots.shift();
   }
 });
@@ -738,7 +670,7 @@ socket.on("state", (serverState) => {
 setInterval(() => {
   if (!state.connected) return;
 
-  socket.volatile.emit("input", {
+  socket.emit("input", {
     mouseX: state.mouseX,
     mouseY: state.mouseY,
     split: state.splitQueued,
@@ -747,7 +679,7 @@ setInterval(() => {
 
   state.splitQueued = false;
   state.ejectQueued = false;
-}, 1000 / INPUT_SEND_RATE);
+}, 1000 / 60);
 
 function loop() {
   const interpolated = getInterpolatedState();
@@ -768,8 +700,7 @@ function loop() {
 spawnMoneySigns(moneyBg, 28);
 spawnMoneySigns(menuMoneyBg, 28);
 checkSession();
-setInterval(() => {
-  refreshBalance();
-}, 5000);
 
 loop();
+
+setPlayButtonState(false);
