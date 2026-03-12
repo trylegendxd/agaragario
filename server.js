@@ -2,13 +2,40 @@ const path = require("path");
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
+const session = require("express-session");
+const Database = require("better-sqlite3");
+const argon2 = require("argon2");
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+const db = new Database("pipo.db");
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
+const sessionMiddleware = session({
+  secret: process.env.SESSION_SECRET || "change-this-secret-in-production",
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: false
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 
+app.use(express.json());
+app.use(sessionMiddleware);
 app.use(express.static(path.join(__dirname, "public")));
 
 const WORLD_SIZE = 12000;
@@ -447,6 +474,90 @@ function buildSnapshotFor(targetPlayer) {
   };
 }
 
+app.post("/api/register", async (req, res) => {
+  try {
+    const username = String(req.body?.username || "").trim();
+    const password = String(req.body?.password || "");
+
+    if (username.length < 3 || username.length > 20) {
+      return res.status(400).json({ error: "Username must be 3-20 characters." });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters." });
+    }
+
+    const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(username);
+    if (existing) {
+      return res.status(409).json({ error: "Username already exists." });
+    }
+
+    const passwordHash = await argon2.hash(password);
+
+    const result = db
+      .prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)")
+      .run(username, passwordHash);
+
+    req.session.user = {
+      id: result.lastInsertRowid,
+      username
+    };
+
+    res.json({
+      ok: true,
+      user: req.session.user
+    });
+  } catch (err) {
+    console.error("REGISTER ERROR:", err);
+    res.status(500).json({ error: "Failed to register." });
+  }
+});
+
+app.post("/api/login", async (req, res) => {
+  try {
+    const username = String(req.body?.username || "").trim();
+    const password = String(req.body?.password || "");
+
+    const user = db
+      .prepare("SELECT id, username, password_hash FROM users WHERE username = ?")
+      .get(username);
+
+    if (!user) {
+      return res.status(401).json({ error: "Invalid username or password." });
+    }
+
+    const ok = await argon2.verify(user.password_hash, password);
+    if (!ok) {
+      return res.status(401).json({ error: "Invalid username or password." });
+    }
+
+    req.session.user = {
+      id: user.id,
+      username: user.username
+    };
+
+    res.json({
+      ok: true,
+      user: req.session.user
+    });
+  } catch (err) {
+    console.error("LOGIN ERROR:", err);
+    res.status(500).json({ error: "Failed to log in." });
+  }
+});
+
+app.post("/api/logout", (req, res) => {
+  req.session.destroy(() => {
+    res.json({ ok: true });
+  });
+});
+
+app.get("/api/me", (req, res) => {
+  res.json({
+    user: req.session.user || null
+  });
+});
+
 app.get("/debug/players", (req, res) => {
   res.json({
     playerCount: players.size,
@@ -464,11 +575,12 @@ io.on("connection", (socket) => {
   console.log("socket connected:", socket.id);
 
   socket.on("join", (payload) => {
-  const name = typeof payload === "string" ? payload : payload?.name;
-  const color = typeof payload === "object" ? payload?.color : null;
+    const name = typeof payload === "string" ? payload : payload?.name;
+    const color = typeof payload === "object" ? payload?.color : null;
 
-  const player = createPlayer(socket.id, name);
-  if (color) player.color = color;
+    const player = createPlayer(socket.id, name);
+    if (color) player.color = color;
+
     players.set(socket.id, player);
     console.log("joined:", socket.id, name, "total players:", players.size);
 
@@ -529,5 +641,26 @@ setInterval(() => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
-});
+}); i changed it like this but it says no module argon2 found 
+node:internal/modules/cjs/loader:1215
+  throw err;
+  ^
 
+Error: Cannot find module 'argon2'
+Require stack:
+- D:\PIPO\server.js
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1212:15)
+    at Module._load (node:internal/modules/cjs/loader:1043:27)
+    at Module.require (node:internal/modules/cjs/loader:1298:19)
+    at require (node:internal/modules/helpers:182:18)
+    at Object.<anonymous> (D:\PIPO\server.js:6:16)
+    at Module._compile (node:internal/modules/cjs/loader:1529:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1613:10)
+    at Module.load (node:internal/modules/cjs/loader:1275:32)
+    at Module._load (node:internal/modules/cjs/loader:1096:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12) {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [ 'D:\\PIPO\\server.js' ]
+}
+
+Node.js v20.19.5 ნაწ
