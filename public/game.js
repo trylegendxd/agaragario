@@ -8,6 +8,9 @@ const startMenuBtn = document.getElementById("startMenuBtn");
 const colorInput = document.getElementById("colorInput");
 const moneyBg = document.getElementById("moneyBg");
 const menuMoneyBg = document.getElementById("menuMoneyBg");
+const balanceValue = document.getElementById("balanceValue");
+const authBalance = document.getElementById("authBalance");
+const topupBtn = document.getElementById("topupBtn");
 
 const menu = document.getElementById("menu");
 const playBtn = document.getElementById("playBtn");
@@ -60,6 +63,7 @@ let hudFrameCounter = 0;
 let chatOpen = false;
 const chatMessages = [];
 let currentUser = null;
+let balanceRequestInFlight = false;
 
 function radiusFromMass(mass) {
   return Math.sqrt(mass) * 4.8;
@@ -95,12 +99,37 @@ function setAuthStatus(text, isError = false) {
   authStatus.style.color = isError ? "#c62828" : "#2e7d32";
 }
 
+function updateBalanceUi() {
+  const credits = currentUser ? Number(currentUser.credits || 0) : 0;
+  const pretty = credits.toFixed(2);
+  if (balanceValue) balanceValue.textContent = pretty;
+  if (authBalance) authBalance.textContent = currentUser ? `Balance: ${pretty} credits` : "Balance: 0.00 credits";
+}
+
+async function refreshBalance() {
+  if (!currentUser || balanceRequestInFlight) return;
+  balanceRequestInFlight = true;
+  try {
+    const data = await api("/api/balance");
+    if (data && typeof data.credits === "number") {
+      currentUser.credits = data.credits;
+      updateBalanceUi();
+    }
+  } catch (err) {
+    console.error("BALANCE REFRESH ERROR:", err);
+  } finally {
+    balanceRequestInFlight = false;
+  }
+}
+
 function updateAuthUi(user) {
   currentUser = user || null;
 
   if (logoutBtn) logoutBtn.style.display = user ? "block" : "none";
   if (loginBtn) loginBtn.style.display = user ? "none" : "block";
   if (registerBtn) registerBtn.style.display = user ? "none" : "block";
+
+  updateBalanceUi();
 
   if (user) {
     setAuthStatus(`Logged in as ${user.username}`);
@@ -242,13 +271,16 @@ function updateCamera() {
 }
 
 function drawGrid() {
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+
   const grid = 50 * state.zoom;
   if (grid < 8) return;
 
   const offsetX = ((-state.cameraX * state.zoom) % grid + grid) % grid;
   const offsetY = ((-state.cameraY * state.zoom) % grid + grid) % grid;
 
-  ctx.strokeStyle = "#eeeeee";
+  ctx.strokeStyle = "#d9d9d9";
   ctx.lineWidth = 1;
 
   for (let x = offsetX; x <= W; x += grid) {
@@ -600,9 +632,38 @@ if (logoutBtn) {
   });
 }
 
+if (topupBtn) {
+  topupBtn.addEventListener("click", async () => {
+    if (!currentUser) {
+      setAuthStatus("Log in first.", true);
+      return;
+    }
+
+    const amountText = window.prompt("How many euros do you want to convert into credits?\nExample: 5 = 5 credits");
+    if (amountText == null) return;
+
+    const amountEur = Number(amountText);
+    if (!Number.isFinite(amountEur) || amountEur <= 0) {
+      setAuthStatus("Enter a valid positive amount.", true);
+      return;
+    }
+
+    const data = await api("/api/credits/add", { amountEur });
+    if (data.error) {
+      setAuthStatus(data.error, true);
+      return;
+    }
+
+    currentUser.credits = data.credits;
+    updateBalanceUi();
+    setAuthStatus(`Added ${Number(data.addedCredits || 0).toFixed(2)} credits.`);
+  });
+}
+
 socket.on("connect", () => {
   state.connected = true;
   state.myId = socket.id;
+  refreshBalance();
 });
 
 socket.on("disconnect", () => {
@@ -665,5 +726,8 @@ function loop() {
 spawnMoneySigns(moneyBg, 28);
 spawnMoneySigns(menuMoneyBg, 28);
 checkSession();
+setInterval(() => {
+  refreshBalance();
+}, 5000);
 
 loop();
