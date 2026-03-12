@@ -1,11 +1,10 @@
-const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const session = require("express-session");
-const Database = require("better-sqlite3");
 const bcrypt = require("bcryptjs");
+const { Pool } = require("pg");
 
 const app = express();
 const server = http.createServer(app);
@@ -18,8 +17,19 @@ const io = new Server(server, {
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, "public");
-const DATA_DIR = fs.existsSync("/var/data") ? "/var/data" : __dirname;
-const DB_PATH = path.join(DATA_DIR, "pipo.db");
+
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  throw new Error("Missing DATABASE_URL environment variable.");
+}
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl:
+    process.env.NODE_ENV === "production"
+      ? { rejectUnauthorized: false }
+      : false
+});
 
 const WORLD_SIZE = 12000;
 const FOOD_COUNT = 3000;
@@ -32,6 +42,7 @@ const MAX_CHAT_MESSAGES = 40;
 const START_MASS = 30;
 const GAME_ENTRY_COST = 1;
 const REGISTER_BONUS = 5;
+const BOT_FOOD_CAP = 200;
 
 const players = new Map();
 const playerByUserId = new Map();
@@ -39,34 +50,6 @@ const food = [];
 const viruses = [];
 const bots = [];
 const chatMessages = [];
-
-const db = new Database(DB_PATH);
-db.pragma("journal_mode = WAL");
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    credits REAL NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS credit_transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    type TEXT NOT NULL,
-    amount REAL NOT NULL,
-    note TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-  );
-`);
-
-const userColumns = db.prepare("PRAGMA table_info(users)").all();
-if (!userColumns.some((col) => col.name === "credits")) {
-  db.exec("ALTER TABLE users ADD COLUMN credits REAL NOT NULL DEFAULT 0");
-}
 
 const sessionMiddleware = session({
   secret: process.env.SESSION_SECRET || "change-this-secret-in-production",
@@ -86,6 +69,34 @@ io.engine.use(sessionMiddleware);
 
 app.use(express.static(PUBLIC_DIR));
 app.get("/", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
+
+async function initDb() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id BIGSERIAL PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      credits NUMERIC(12,2) NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS credit_transactions (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      amount NUMERIC(12,2) NOT NULL,
+      note TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_credit_transactions_user_id
+    ON credit_transactions(user_id)
+  `);
+}
 
 function rand(min, max) {
   return Math.random() * (max - min) + min;
@@ -174,7 +185,7 @@ function createHumanPlayer(socketId, user, payload) {
   return {
     kind: "human",
     id: socketId,
-    userId: user.id,
+    userId: Number(user.id),
     username: user.username,
     name: safeName,
     color: requestedColor || randomColor(),
@@ -227,14 +238,164 @@ function addChatMessage(name, text) {
   io.emit("chat", msg);
 }
 
-function getSessionUser(req) {
+async function getUserByUsername(username) {
+  const { rows } = await pool.query(
+    `
+    SELECT id, username, password_hash, credits
+    FROM users
+    WHERE username = $1
+    `,
+    [username]
+  );
+  if (!rows[0]) return null;
+  return {
+    id: Number(rows[0].id),
+    username: rows[0].username,
+    password_hash: rows[0].password_hash,
+    credits: Number(rows[0].credits || 0)
+  };
+}
+
+async function getUserById(id) {
+  const { rows } = await pool.query(
+    `
+    SELECT id, username, credits
+    FROM users
+    WHERE id = $1
+    `,
+    [id]
+  );
+  if (!rows[0]) return null;
+  return {
+    id: Number(rows[0].id),
+    username: rows[0].username,
+    credits: Number(rows[0].credits || 0)
+  };
+}
+
+async function createUserWithBonus(username, passwordHash) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const insertUser = await client.query(
+      `
+      INSERT INTO users (username, password_hash, credits)
+      VALUES ($1, $2, $3)
+      RETURNING id
+      `,
+      [username, passwordHash, REGISTER_BONUS]
+    );
+
+    const userId = Number(insertUser.rows[0].id);
+
+    await client.query(
+      `
+      INSERT INTO credit_transactions (user_id, type, amount, note)
+      VALUES ($1, $2, $3, $4)
+      `,
+      [userId, "register_bonus", REGISTER_BONUS, "Welcome bonus"]
+    );
+
+    await client.query("COMMIT");
+    return userId;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function addCreditsTx(userId, amount, type, note) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const currentRes = await client.query(
+      `SELECT id, credits FROM users WHERE id = $1 FOR UPDATE`,
+      [userId]
+    );
+    if (!currentRes.rows[0]) {
+      throw new Error("USER_NOT_FOUND");
+    }
+
+    const currentCredits = Number(currentRes.rows[0].credits || 0);
+    const nextCredits = currentCredits + Number(amount);
+
+    await client.query(`UPDATE users SET credits = $1 WHERE id = $2`, [
+      nextCredits,
+      userId
+    ]);
+
+    await client.query(
+      `
+      INSERT INTO credit_transactions (user_id, type, amount, note)
+      VALUES ($1, $2, $3, $4)
+      `,
+      [userId, type, amount, note || null]
+    );
+
+    await client.query("COMMIT");
+    return nextCredits;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function spendCreditsTx(userId, amount, type, note) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const currentRes = await client.query(
+      `SELECT id, credits FROM users WHERE id = $1 FOR UPDATE`,
+      [userId]
+    );
+    if (!currentRes.rows[0]) {
+      throw new Error("USER_NOT_FOUND");
+    }
+
+    const currentCredits = Number(currentRes.rows[0].credits || 0);
+    if (currentCredits < amount) {
+      const err = new Error("INSUFFICIENT_CREDITS");
+      err.code = "INSUFFICIENT_CREDITS";
+      throw err;
+    }
+
+    const nextCredits = currentCredits - Number(amount);
+
+    await client.query(`UPDATE users SET credits = $1 WHERE id = $2`, [
+      nextCredits,
+      userId
+    ]);
+
+    await client.query(
+      `
+      INSERT INTO credit_transactions (user_id, type, amount, note)
+      VALUES ($1, $2, $3, $4)
+      `,
+      [userId, type, -Math.abs(amount), note || null]
+    );
+
+    await client.query("COMMIT");
+    return nextCredits;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function getSessionUser(req) {
   const raw = req.session?.user;
   if (!raw?.id) return null;
 
-  const row = db
-    .prepare("SELECT id, username, credits FROM users WHERE id = ?")
-    .get(raw.id);
-
+  const row = await getUserById(raw.id);
   if (!row) return null;
 
   req.session.user = {
@@ -246,77 +407,19 @@ function getSessionUser(req) {
   return req.session.user;
 }
 
-function requireAuth(req, res, next) {
-  const user = getSessionUser(req);
-  if (!user) {
-    return res.status(401).json({ error: "You must be logged in." });
+async function requireAuth(req, res, next) {
+  try {
+    const user = await getSessionUser(req);
+    if (!user) {
+      return res.status(401).json({ error: "You must be logged in." });
+    }
+    req.user = user;
+    next();
+  } catch (err) {
+    console.error("AUTH ERROR:", err);
+    res.status(500).json({ error: "Authentication failed." });
   }
-  req.user = user;
-  next();
 }
-
-const insertCreditTransaction = db.prepare(`
-  INSERT INTO credit_transactions (user_id, type, amount, note)
-  VALUES (?, ?, ?, ?)
-`);
-
-const setUserCredits = db.prepare(`
-  UPDATE users SET credits = ? WHERE id = ?
-`);
-
-const getUserByUsername = db.prepare(`
-  SELECT id, username, password_hash, credits
-  FROM users
-  WHERE username = ?
-`);
-
-const getUserById = db.prepare(`
-  SELECT id, username, credits
-  FROM users
-  WHERE id = ?
-`);
-
-const createUserWithBonus = db.transaction((username, passwordHash) => {
-  const result = db
-    .prepare("INSERT INTO users (username, password_hash, credits) VALUES (?, ?, ?)")
-    .run(username, passwordHash, REGISTER_BONUS);
-
-  insertCreditTransaction.run(
-    result.lastInsertRowid,
-    "register_bonus",
-    REGISTER_BONUS,
-    "Welcome bonus"
-  );
-
-  return result.lastInsertRowid;
-});
-
-const addCreditsTx = db.transaction((userId, amount, type, note) => {
-  const current = getUserById.get(userId);
-  if (!current) throw new Error("USER_NOT_FOUND");
-
-  const nextCredits = Number(current.credits || 0) + Number(amount);
-  setUserCredits.run(nextCredits, userId);
-  insertCreditTransaction.run(userId, type, amount, note || null);
-  return nextCredits;
-});
-
-const spendCreditsTx = db.transaction((userId, amount, type, note) => {
-  const current = getUserById.get(userId);
-  if (!current) throw new Error("USER_NOT_FOUND");
-
-  const currentCredits = Number(current.credits || 0);
-  if (currentCredits < amount) {
-    const err = new Error("INSUFFICIENT_CREDITS");
-    err.code = "INSUFFICIENT_CREDITS";
-    throw err;
-  }
-
-  const nextCredits = currentCredits - Number(amount);
-  setUserCredits.run(nextCredits, userId);
-  insertCreditTransaction.run(userId, type, -Math.abs(amount), note || null);
-  return nextCredits;
-});
 
 app.post("/api/register", async (req, res) => {
   try {
@@ -331,14 +434,14 @@ app.post("/api/register", async (req, res) => {
       return res.status(400).json({ error: "Password must be at least 6 characters." });
     }
 
-    const existing = getUserByUsername.get(username);
+    const existing = await getUserByUsername(username);
     if (existing) {
       return res.status(409).json({ error: "Username already exists." });
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const userId = createUserWithBonus(username, passwordHash);
-    const user = getUserById.get(userId);
+    const userId = await createUserWithBonus(username, passwordHash);
+    const user = await getUserById(userId);
 
     req.session.user = {
       id: user.id,
@@ -370,7 +473,7 @@ app.post("/api/login", async (req, res) => {
     const username = String(req.body?.username || "").trim();
     const password = String(req.body?.password || "");
 
-    const user = getUserByUsername.get(username);
+    const user = await getUserByUsername(username);
     if (!user) {
       return res.status(401).json({ error: "Invalid username or password." });
     }
@@ -407,30 +510,50 @@ app.post("/api/logout", (req, res) => {
   });
 });
 
-app.get("/api/me", (req, res) => {
-  const user = getSessionUser(req);
-  res.json({ user: user || null });
+app.get("/api/me", async (req, res) => {
+  try {
+    const user = await getSessionUser(req);
+    res.json({ user: user || null });
+  } catch (err) {
+    console.error("ME ERROR:", err);
+    res.status(500).json({ user: null });
+  }
 });
 
 app.get("/api/balance", requireAuth, (req, res) => {
   res.json({ ok: true, wallet: Number(req.user.credits || 0) });
 });
 
-app.get("/api/credits/history", requireAuth, (req, res) => {
-  const rows = db
-    .prepare(`
+app.get("/api/credits/history", requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `
       SELECT id, type, amount, note, created_at
       FROM credit_transactions
-      WHERE user_id = ?
+      WHERE user_id = $1
       ORDER BY id DESC
       LIMIT 50
-    `)
-    .all(req.user.id);
+      `,
+      [req.user.id]
+    );
 
-  res.json({ ok: true, items: rows });
+    res.json({
+      ok: true,
+      items: rows.map((row) => ({
+        id: Number(row.id),
+        type: row.type,
+        amount: Number(row.amount),
+        note: row.note,
+        created_at: row.created_at
+      }))
+    });
+  } catch (err) {
+    console.error("CREDITS HISTORY ERROR:", err);
+    res.status(500).json({ error: "Failed to load history." });
+  }
 });
 
-app.post("/api/credits/add", requireAuth, (req, res) => {
+app.post("/api/credits/add", requireAuth, async (req, res) => {
   try {
     const amount = Number(req.body?.amount || 0);
 
@@ -438,7 +561,7 @@ app.post("/api/credits/add", requireAuth, (req, res) => {
       return res.status(400).json({ error: "Invalid amount." });
     }
 
-    const wallet = addCreditsTx(
+    const wallet = await addCreditsTx(
       req.user.id,
       amount,
       "manual_add",
@@ -454,7 +577,7 @@ app.post("/api/credits/add", requireAuth, (req, res) => {
   }
 });
 
-app.post("/api/credits/withdraw", requireAuth, (req, res) => {
+app.post("/api/credits/withdraw", requireAuth, async (req, res) => {
   try {
     const amount = Number(req.body?.amount || 0);
     const address = String(req.body?.address || "").trim();
@@ -467,7 +590,7 @@ app.post("/api/credits/withdraw", requireAuth, (req, res) => {
       return res.status(400).json({ error: "Missing Solana wallet address." });
     }
 
-    const wallet = spendCreditsTx(
+    const wallet = await spendCreditsTx(
       req.user.id,
       amount,
       "withdraw_request",
@@ -503,9 +626,9 @@ app.post("/api/payments/solana/quote", requireAuth, (req, res) => {
   });
 });
 
-app.post("/api/game/enter", requireAuth, (req, res) => {
+app.post("/api/game/enter", requireAuth, async (req, res) => {
   try {
-    const freshUser = getUserById.get(req.user.id);
+    const freshUser = await getUserById(req.user.id);
     if (!freshUser) {
       return res.status(404).json({ error: "User not found." });
     }
@@ -562,8 +685,7 @@ app.get("/debug/players", (req, res) => {
       cells: b.cells.length
     })),
     food: food.length,
-    chatMessages: chatMessages.length,
-    dbPath: DB_PATH
+    chatMessages: chatMessages.length
   });
 });
 
@@ -699,16 +821,40 @@ function ejectMass(entity) {
 }
 
 function handleFoodEating(entity) {
+  let botRemainingFoodGrowth = Infinity;
+
+  if (isBot(entity)) {
+    const currentMass = totalMass(entity);
+    botRemainingFoodGrowth = Math.max(0, BOT_FOOD_CAP - currentMass);
+
+    if (botRemainingFoodGrowth <= 0) {
+      while (food.length < FOOD_COUNT) {
+        food.push(createFood());
+      }
+      return;
+    }
+  }
+
   for (const cell of entity.cells) {
     const r = radiusFromMass(cell.mass);
     const rr = (r + 8) * (r + 8);
 
     for (let i = food.length - 1; i >= 0; i--) {
+      if (isBot(entity) && botRemainingFoodGrowth <= 0) break;
+
       const f = food[i];
       if (Math.abs(cell.x - f.x) > 120 || Math.abs(cell.y - f.y) > 120) continue;
 
       if (distanceSq(cell.x, cell.y, f.x, f.y) < rr) {
-        cell.mass += f.mass;
+        if (isBot(entity)) {
+          const gain = Math.min(f.mass, botRemainingFoodGrowth);
+          if (gain <= 0) continue;
+          cell.mass += gain;
+          botRemainingFoodGrowth -= gain;
+        } else {
+          cell.mass += f.mass;
+        }
+
         food.splice(i, 1);
       }
     }
@@ -796,7 +942,7 @@ function botThink(bot) {
   if (!bot.cells.length) return;
 
   const center = entityCenter(bot);
-  const biggestMass = Math.max(...bot.cells.map((c) => c.mass));
+  const botMass = totalMass(bot);
 
   let moveX = rand(-100, 100);
   let moveY = rand(-100, 100);
@@ -806,10 +952,11 @@ function botThink(bot) {
 
     const pc = entityCenter(player);
     const d = distance(center.x, center.y, pc.x, pc.y);
+    const playerMass = totalMass(player);
 
-    if (d < 1100) {
-      moveX += (center.x - pc.x) * 2.2;
-      moveY += (center.y - pc.y) * 2.2;
+    if (playerMass > botMass * 1.08 && d < 1300) {
+      moveX += (center.x - pc.x) * 2.4;
+      moveY += (center.y - pc.y) * 2.4;
     }
   }
 
@@ -820,32 +967,34 @@ function botThink(bot) {
     const d = distance(center.x, center.y, oc.x, oc.y) || 1;
     const otherMass = totalMass(other);
 
-    if (otherMass > biggestMass * 1.08 && d < 1200) {
-      moveX += (center.x - oc.x) * 1.8;
-      moveY += (center.y - oc.y) * 1.8;
-    } else if (biggestMass > otherMass * 1.18 && d < 1800) {
-      moveX += (oc.x - center.x) * 1.2;
-      moveY += (oc.y - center.y) * 1.2;
+    if (otherMass > botMass * 1.08 && d < 1300) {
+      moveX += (center.x - oc.x) * 2.0;
+      moveY += (center.y - oc.y) * 2.0;
+    } else if (botMass > otherMass * 1.18 && d < 1800) {
+      moveX += (oc.x - center.x) * 1.4;
+      moveY += (oc.y - center.y) * 1.4;
     }
   }
 
-  let nearestFood = null;
-  let nearestFoodDist = Infinity;
+  if (botMass < BOT_FOOD_CAP) {
+    let nearestFood = null;
+    let nearestFoodDist = Infinity;
 
-  for (const f of food) {
-    const dx = f.x - center.x;
-    const dy = f.y - center.y;
-    const dsq = dx * dx + dy * dy;
+    for (const f of food) {
+      const dx = f.x - center.x;
+      const dy = f.y - center.y;
+      const dsq = dx * dx + dy * dy;
 
-    if (dsq < nearestFoodDist && dsq < 260 * 260) {
-      nearestFoodDist = dsq;
-      nearestFood = f;
+      if (dsq < nearestFoodDist && dsq < 320 * 320) {
+        nearestFoodDist = dsq;
+        nearestFood = f;
+      }
     }
-  }
 
-  if (nearestFood) {
-    moveX += (nearestFood.x - center.x) * 0.45;
-    moveY += (nearestFood.y - center.y) * 0.45;
+    if (nearestFood) {
+      moveX += (nearestFood.x - center.x) * 0.55;
+      moveY += (nearestFood.y - center.y) * 0.55;
+    }
   }
 
   bot.mouse.x = clamp(moveX, -1400, 1400);
@@ -948,7 +1097,7 @@ function buildLeaderboard() {
     .slice(0, 10);
 }
 
-function buildSnapshotFor(targetPlayer) {
+async function buildSnapshotFor(targetPlayer) {
   const center = entityCenter(targetPlayer);
   const total = totalMass(targetPlayer);
 
@@ -1011,13 +1160,15 @@ function buildSnapshotFor(targetPlayer) {
 
   visiblePlayers.sort((a, b) => a.totalMass - b.totalMass);
 
+  const freshUser = await getUserById(targetPlayer.userId);
+
   return {
     worldSize: WORLD_SIZE,
     food: visibleFood,
     viruses: visibleViruses,
     players: visiblePlayers,
     leaderboard: buildLeaderboard(),
-    wallet: getUserById.get(targetPlayer.userId)?.credits ?? 0,
+    wallet: freshUser?.credits ?? 0,
     debugPlayerCount: players.size,
     debugBotCount: bots.length
   };
@@ -1026,7 +1177,7 @@ function buildSnapshotFor(targetPlayer) {
 io.on("connection", (socket) => {
   console.log("socket connected:", socket.id);
 
-  socket.on("join", (payload) => {
+  socket.on("join", async (payload) => {
     try {
       const req = socket.request;
       const sessionUser = req.session?.user;
@@ -1036,7 +1187,7 @@ io.on("connection", (socket) => {
         return;
       }
 
-      const freshUser = getUserById.get(sessionUser.id);
+      const freshUser = await getUserById(sessionUser.id);
       if (!freshUser) {
         socket.emit("joinError", { error: "User not found." });
         return;
@@ -1062,7 +1213,7 @@ io.on("connection", (socket) => {
         return;
       }
 
-      const wallet = spendCreditsTx(
+      const wallet = await spendCreditsTx(
         freshUser.id,
         GAME_ENTRY_COST,
         "game_entry",
@@ -1076,12 +1227,12 @@ io.on("connection", (socket) => {
       };
       req.session.gameEntryReady = false;
 
-      req.session.save((saveErr) => {
+      req.session.save(async (saveErr) => {
         if (saveErr) {
           console.error("SESSION SAVE ERROR AFTER JOIN:", saveErr);
 
           try {
-            const refundedWallet = addCreditsTx(
+            const refundedWallet = await addCreditsTx(
               freshUser.id,
               GAME_ENTRY_COST,
               "game_entry_refund",
@@ -1172,7 +1323,7 @@ io.on("connection", (socket) => {
   });
 });
 
-function tick() {
+async function tick() {
   respawnMissingBots();
 
   for (const bot of bots) {
@@ -1199,22 +1350,34 @@ function tick() {
   for (const [id, player] of players.entries()) {
     const sock = io.sockets.sockets.get(id);
     if (!sock) continue;
-    sock.volatile.emit("state", buildSnapshotFor(player));
+
+    try {
+      const snapshot = await buildSnapshotFor(player);
+      sock.volatile.emit("state", snapshot);
+    } catch (err) {
+      console.error("SNAPSHOT ERROR:", err);
+    }
   }
 }
 
 resetWorldObjects();
 respawnMissingBots();
 
-setInterval(() => {
-  try {
-    tick();
-  } catch (err) {
-    console.error("GAME LOOP ERROR:", err);
-  }
-}, 1000 / TICK_RATE);
+async function start() {
+  await initDb();
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on http://0.0.0.0:${PORT}`);
-  console.log(`Using database: ${DB_PATH}`);
+  setInterval(() => {
+    tick().catch((err) => {
+      console.error("GAME LOOP ERROR:", err);
+    });
+  }, 1000 / TICK_RATE);
+
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  });
+}
+
+start().catch((err) => {
+  console.error("STARTUP ERROR:", err);
+  process.exit(1);
 });
