@@ -8,9 +8,12 @@ const startMenuBtn = document.getElementById("startMenuBtn");
 const colorInput = document.getElementById("colorInput");
 const moneyBg = document.getElementById("moneyBg");
 const menuMoneyBg = document.getElementById("menuMoneyBg");
-const balanceValue = document.getElementById("balanceValue");
-const authBalance = document.getElementById("authBalance");
-const topupBtn = document.getElementById("topupBtn");
+const walletValue = document.getElementById("walletValue");
+const walletAmountInput = document.getElementById("walletAmountInput");
+const withdrawAddressInput = document.getElementById("withdrawAddressInput");
+const addBalanceBtn = document.getElementById("addBalanceBtn");
+const withdrawBtn = document.getElementById("withdrawBtn");
+const walletStatus = document.getElementById("walletStatus");
 
 const menu = document.getElementById("menu");
 const playBtn = document.getElementById("playBtn");
@@ -99,11 +102,17 @@ function setAuthStatus(text, isError = false) {
   authStatus.style.color = isError ? "#c62828" : "#2e7d32";
 }
 
+
+function setWalletStatus(text, isError = false) {
+  if (!walletStatus) return;
+  walletStatus.textContent = text || "";
+  walletStatus.style.color = isError ? "#c62828" : "#2e7d32";
+}
+
 function updateBalanceUi() {
   const credits = currentUser ? Number(currentUser.credits || 0) : 0;
   const pretty = credits.toFixed(2);
-  if (balanceValue) balanceValue.textContent = pretty;
-  if (authBalance) authBalance.textContent = currentUser ? `Balance: ${pretty} credits` : "Balance: 0.00 credits";
+  if (walletValue) walletValue.textContent = `$${pretty}`;
 }
 
 async function refreshBalance() {
@@ -129,8 +138,6 @@ function updateAuthUi(user) {
   if (loginBtn) loginBtn.style.display = user ? "none" : "block";
   if (registerBtn) registerBtn.style.display = user ? "none" : "block";
 
-  updateBalanceUi();
-
   if (user) {
     setAuthStatus(`Logged in as ${user.username}`);
     if (authUsername) authUsername.value = user.username;
@@ -138,14 +145,18 @@ function updateAuthUi(user) {
 
     if (authPanel) authPanel.style.display = "none";
     if (landingScreen) landingScreen.style.display = "none";
-    menu.style.display = "flex";
+    if (menu) menu.style.display = "flex";
+    setWalletStatus("");
   } else {
     setAuthStatus("Not logged in.", false);
 
     if (authPassword) authPassword.value = "";
     if (authPanel) authPanel.style.display = "none";
     if (landingScreen) landingScreen.style.display = "flex";
-    menu.style.display = "none";
+    if (menu) menu.style.display = "none";
+    if (walletAmountInput) walletAmountInput.value = "";
+    if (withdrawAddressInput) withdrawAddressInput.value = "";
+    setWalletStatus("");
   }
 }
 
@@ -271,16 +282,13 @@ function updateCamera() {
 }
 
 function drawGrid() {
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, W, H);
-
   const grid = 50 * state.zoom;
   if (grid < 8) return;
 
   const offsetX = ((-state.cameraX * state.zoom) % grid + grid) % grid;
   const offsetY = ((-state.cameraY * state.zoom) % grid + grid) % grid;
 
-  ctx.strokeStyle = "#d9d9d9";
+  ctx.strokeStyle = "#eeeeee";
   ctx.lineWidth = 1;
 
   for (let x = offsetX; x <= W; x += grid) {
@@ -607,6 +615,7 @@ if (registerBtn) {
     }
 
     updateAuthUi(data.user);
+    updateBalanceUi();
   });
 }
 
@@ -622,6 +631,7 @@ if (loginBtn) {
     }
 
     updateAuthUi(data.user);
+    updateBalanceUi();
   });
 }
 
@@ -632,31 +642,63 @@ if (logoutBtn) {
   });
 }
 
-if (topupBtn) {
-  topupBtn.addEventListener("click", async () => {
+
+if (addBalanceBtn) {
+  addBalanceBtn.addEventListener("click", async () => {
     if (!currentUser) {
-      setAuthStatus("Log in first.", true);
+      setWalletStatus("Log in first.", true);
       return;
     }
 
-    const amountText = window.prompt("How many euros do you want to convert into credits?\nExample: 5 = 5 credits");
-    if (amountText == null) return;
-
-    const amountEur = Number(amountText);
+    const amountEur = Number(walletAmountInput?.value);
     if (!Number.isFinite(amountEur) || amountEur <= 0) {
-      setAuthStatus("Enter a valid positive amount.", true);
+      setWalletStatus("Enter a valid positive amount.", true);
       return;
     }
 
     const data = await api("/api/credits/add", { amountEur });
     if (data.error) {
-      setAuthStatus(data.error, true);
+      setWalletStatus(data.error, true);
       return;
     }
 
     currentUser.credits = data.credits;
     updateBalanceUi();
-    setAuthStatus(`Added ${Number(data.addedCredits || 0).toFixed(2)} credits.`);
+    if (walletAmountInput) walletAmountInput.value = "";
+    setWalletStatus(`Added $${Number(data.addedCredits || 0).toFixed(2)} to wallet.`);
+  });
+}
+
+if (withdrawBtn) {
+  withdrawBtn.addEventListener("click", async () => {
+    if (!currentUser) {
+      setWalletStatus("Log in first.", true);
+      return;
+    }
+
+    const amountEur = Number(walletAmountInput?.value);
+    const solanaAddress = String(withdrawAddressInput?.value || "").trim();
+
+    if (!Number.isFinite(amountEur) || amountEur <= 0) {
+      setWalletStatus("Enter a valid withdrawal amount.", true);
+      return;
+    }
+
+    if (solanaAddress.length < 20) {
+      setWalletStatus("Enter a valid Solana address.", true);
+      return;
+    }
+
+    const data = await api("/api/credits/withdraw", { amountEur, solanaAddress });
+    if (data.error) {
+      setWalletStatus(data.error, true);
+      return;
+    }
+
+    currentUser.credits = data.credits;
+    updateBalanceUi();
+    if (walletAmountInput) walletAmountInput.value = "";
+    setWalletStatus(`Withdrawal requested for $${Number(data.requestedAmount || 0).toFixed(2)}.`);
   });
 }
 
