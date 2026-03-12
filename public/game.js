@@ -35,7 +35,7 @@ const state = {
 };
 
 const snapshots = [];
-const INTERPOLATION_DELAY = 40;
+const INTERPOLATION_DELAY = 20;
 
 function radiusFromMass(mass) {
   return Math.sqrt(mass) * 4.8;
@@ -431,5 +431,6 @@ function loop() {
 }
 
 loop();
+
 
 
