@@ -463,8 +463,12 @@ app.get("/debug/players", (req, res) => {
 io.on("connection", (socket) => {
   console.log("socket connected:", socket.id);
 
-  socket.on("join", (name) => {
-    const player = createPlayer(socket.id, name);
+  socket.on("join", (payload) => {
+  const name = typeof payload === "string" ? payload : payload?.name;
+  const color = typeof payload === "object" ? payload?.color : null;
+
+  const player = createPlayer(socket.id, name);
+  if (color) player.color = color;
     players.set(socket.id, player);
     console.log("joined:", socket.id, name, "total players:", players.size);
 
@@ -526,3 +530,4 @@ setInterval(() => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
 });
+
