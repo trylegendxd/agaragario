@@ -6,6 +6,8 @@ const session = require("express-session");
 const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcryptjs");
 const { Pool } = require("pg");
+const EXTRACTION_HOLD_TICKS = 6 * TICK_RATE;
+const EXTRACTION_PAYOUT_RATE = 0.95;
 
 const app = express();
 app.set("trust proxy", 1);
@@ -232,20 +234,22 @@ function createHumanPlayer(socketId, user, payload) {
     "Player";
 
   return {
-    kind: "human",
-    id: socketId,
-    userId: Number(user.id),
-    username: user.username,
-    name: safeName,
-    color: requestedColor || randomColor(),
-    mouse: { x: 0, y: 0 },
-    wantsSplit: false,
-    wantsEject: false,
-    cashValue: GAME_ENTRY_COST,
-    cells: [randomSpawnCell()],
-    alive: true,
-    joinedAt: Date.now()
-  };
+  kind: "human",
+  id: socketId,
+  userId: Number(user.id),
+  username: user.username,
+  name: safeName,
+  color: requestedColor || randomColor(),
+  mouse: { x: 0, y: 0 },
+  wantsSplit: false,
+  wantsEject: false,
+  wantsExtract: false,
+  extracting: false,
+  extractTicks: 0,
+  cells: [randomSpawnCell()],
+  alive: true,
+  joinedAt: Date.now()
+ };
 }
 
 function createBot(index) {
@@ -307,6 +311,53 @@ async function getUserByUsername(username) {
     password_hash: rows[0].password_hash,
     credits: Number(rows[0].credits || 0)
   };
+}
+
+async function completeExtraction(player) {
+  const socket = io.sockets.sockets.get(player.id);
+  if (!player || !socket) return;
+
+  const totalValue = Number(player.cashValue || 0);
+  const payout = Number((totalValue * EXTRACTION_PAYOUT_RATE).toFixed(2));
+
+  try {
+    if (payout > 0) {
+      const wallet = await addCreditsTx(
+        player.userId,
+        payout,
+        "extraction_payout",
+        `Extracted from match (${Math.round(EXTRACTION_PAYOUT_RATE * 100)}% payout)`
+      );
+
+      if (socket.request?.session?.user) {
+        socket.request.session.user.credits = wallet;
+      }
+    }
+
+    players.delete(player.id);
+    if (player.userId) {
+      playerByUserId.delete(player.userId);
+    }
+
+    if (socket.request?.session) {
+      socket.request.session.gameEntryReady = false;
+      socket.request.session.save(() => {});
+    }
+
+    socket.emit("extracted", {
+      payout,
+      kept: totalValue,
+      message: `You extracted ${payout.toFixed(2)} back to your wallet.`
+    });
+
+    addChatMessage("SERVER", `${player.name} extracted from the match`);
+  } catch (err) {
+    console.error("EXTRACTION ERROR:", err);
+    socket.emit("extractFailed", { error: "Failed to extract." });
+    player.extracting = false;
+    player.extractTicks = 0;
+    player.wantsExtract = false;
+  }
 }
 
 async function getUserById(id) {
@@ -770,6 +821,25 @@ function respawnMissingBots() {
 }
 
 function moveEntity(entity) {
+  if (entity.extracting) {
+  for (const cell of entity.cells) {
+    cell.vx *= 0.6;
+    cell.vy *= 0.6;
+    cell.x += cell.vx;
+    cell.y += cell.vy;
+
+    if (cell.mergeTimer > 0) cell.mergeTimer--;
+  }
+
+  for (const cell of entity.cells) {
+    const r = radiusFromMass(cell.mass);
+    const bound = WORLD_SIZE / 2 - r;
+    cell.x = clamp(cell.x, -bound, bound);
+    cell.y = clamp(cell.y, -bound, bound);
+  }
+
+  return;
+ }
   for (const cell of entity.cells) {
     const speed = 2.9 / Math.pow(cell.mass, 0.16);
     const len = Math.hypot(entity.mouse.x, entity.mouse.y) || 1;
@@ -846,6 +916,23 @@ function moveEntity(entity) {
     const clamped = clampToWorldCircle(cell.x, cell.y, r);
     cell.x = clamped.x;
     cell.y = clamped.y;
+  }
+}
+
+function updateExtraction(entity) {
+  if (!isHuman(entity)) return;
+  if (!entity.cells.length) return;
+
+  if (entity.wantsExtract) {
+    entity.extracting = true;
+    entity.extractTicks += 1;
+    entity.mouse.x = 0;
+    entity.mouse.y = 0;
+    entity.wantsSplit = false;
+    entity.wantsEject = false;
+  } else {
+    entity.extracting = false;
+    entity.extractTicks = 0;
   }
 }
 
@@ -1289,6 +1376,8 @@ async function buildSnapshotFor(targetPlayer) {
       color: entity.color,
       totalMass: Math.round(totalMass(entity)),
       cashValue: Number(entity.cashValue || 0),
+      extracting: !!entity.extracting,
+      extractTicks: Number(entity.extractTicks || 0),
       isBot: isBot(entity),
       cells: entity.cells.map((c) => ({
         x: c.x,
@@ -1440,6 +1529,7 @@ io.on("connection", (socket) => {
     if (typeof input?.mouseY === "number") player.mouse.y = input.mouseY;
     if (input?.split) player.wantsSplit = true;
     if (input?.eject) player.wantsEject = true;
+    if (typeof input?.extracting === "boolean") player.wantsExtract = input.extracting;
   });
 
   socket.on("disconnect", () => {
@@ -1473,15 +1563,24 @@ async function tick() {
   moveEjectedFood();
 
   for (const entity of [...players.values(), ...bots]) {
-    if (!entity.cells.length) continue;
+  if (!entity.cells.length) continue;
 
-    moveEntity(entity);
-    splitEntity(entity);
-    ejectMass(entity);
-    handleFoodEating(entity);
-    handleVirusCollisions(entity);
-    handleSelfMerge(entity);
-  }
+  updateExtraction(entity);
+  moveEntity(entity);
+  splitEntity(entity);
+  ejectMass(entity);
+  handleFoodEating(entity);
+  handleVirusCollisions(entity);
+  handleSelfMerge(entity);
+}
+
+const finishedExtractions = [...players.values()].filter(
+  (p) => p.extracting && p.extractTicks >= EXTRACTION_HOLD_TICKS
+);
+
+for (const player of finishedExtractions) {
+  await completeExtraction(player);
+}
 
   handleEntityVsEntity();
 
@@ -1523,5 +1622,6 @@ start().catch((err) => {
   console.error("STARTUP ERROR:", err);
   process.exit(1);
 });
+
 
 
