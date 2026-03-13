@@ -30,7 +30,6 @@ const loginBtn = document.getElementById("loginBtn");
 const logoutBtn = document.getElementById("logoutBtn");
 const authStatus = document.getElementById("authStatus");
 
-const walletPanel = document.getElementById("walletPanel");
 const walletValue = document.getElementById("walletValue");
 const walletAmountInput = document.getElementById("walletAmountInput");
 const withdrawAddressInput = document.getElementById("withdrawAddressInput");
@@ -81,7 +80,7 @@ function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
-function waitForSocketConnect(timeoutMs = 4000) {
+function waitForSocketConnect(timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     if (socket.connected) {
       resolve();
@@ -198,6 +197,12 @@ function showMenu() {
   if (menu) menu.classList.remove("hidden");
 }
 
+function hideMenusForGame() {
+  if (landingScreen) landingScreen.classList.add("hidden");
+  if (authPanel) authPanel.classList.add("hidden");
+  if (menu) menu.classList.add("hidden");
+}
+
 function updateWalletUi(wallet) {
   state.wallet = Number(wallet || 0);
   if (walletValue) walletValue.textContent = formatMoney(state.wallet);
@@ -213,24 +218,6 @@ function setAuthButtonsLoggedIn(loggedIn) {
   if (logoutBtn) logoutBtn.classList.toggle("hidden", !loggedIn);
   if (loginBtn) loginBtn.classList.toggle("hidden", loggedIn);
   if (registerBtn) registerBtn.classList.toggle("hidden", loggedIn);
-}
-
-function showLandingWithAuth() {
-  if (landingScreen) landingScreen.classList.remove("hidden");
-  if (authPanel) authPanel.classList.remove("hidden");
-  if (menu) menu.classList.add("hidden");
-}
-
-function showMenu() {
-  if (landingScreen) landingScreen.classList.add("hidden");
-  if (authPanel) authPanel.classList.add("hidden");
-  if (menu) menu.classList.remove("hidden");
-}
-
-function hideMenusForGame() {
-  if (landingScreen) landingScreen.classList.add("hidden");
-  if (authPanel) authPanel.classList.add("hidden");
-  if (menu) menu.classList.add("hidden");
 }
 
 function resetGameVisualState() {
@@ -278,7 +265,7 @@ async function refreshWallet() {
   const data = await api("/api/balance");
   if (!data.error && typeof data.wallet !== "undefined") {
     updateWalletUi(data.wallet);
-    if (currentUser) currentUser.credits = Number(data.wallet || 0);
+    currentUser.credits = Number(data.wallet || 0);
   }
 }
 
@@ -289,17 +276,14 @@ async function checkSession() {
 
     if (data.user) {
       await reconnectSocketAfterAuth();
-    } else if (!socket.connected) {
-      socket.connect();
     }
   } catch (err) {
     console.error("SESSION CHECK ERROR:", err);
     setAuthStatus("Failed to check session.", true);
-    if (!socket.connected) {
-      socket.connect();
-    }
   }
 }
+
+const stateChatMessages = [];
 
 function renderChat() {
   if (!chatMessagesEl) return;
@@ -317,8 +301,6 @@ function renderChat() {
 
   chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
 }
-
-const stateChatMessages = [];
 
 function pushChatMessage(msg) {
   stateChatMessages.push(msg);
@@ -816,7 +798,7 @@ nameInput?.addEventListener("keydown", (e) => {
 });
 
 startMenuBtn?.addEventListener("click", () => {
-  if (authPanel) authPanel.classList.remove("hidden");
+  showLandingWithAuth();
 });
 
 if (chatInput) {
@@ -849,8 +831,8 @@ registerBtn?.addEventListener("click", async () => {
       return;
     }
 
-    await reconnectSocketAfterAuth();
     updateAuthUi(data.user);
+    await reconnectSocketAfterAuth();
     setMenuStatus("Welcome bonus received: $5.00");
   } catch (err) {
     console.error("REGISTER ERROR:", err);
@@ -869,8 +851,8 @@ loginBtn?.addEventListener("click", async () => {
       return;
     }
 
-    await reconnectSocketAfterAuth();
     updateAuthUi(data.user);
+    await reconnectSocketAfterAuth();
   } catch (err) {
     console.error("LOGIN ERROR:", err);
     setAuthStatus("Failed to log in.", true);
@@ -913,18 +895,24 @@ socket.on("disconnect", () => {
   }
 });
 
-socket.on("joined", () => {
+socket.on("joined", (data) => {
   inMatch = true;
   hideMenusForGame();
   setPlayButtonState(false);
   setMenuStatus("");
   setWalletStatus("");
+
+  if (typeof data?.wallet !== "undefined") {
+    updateWalletUi(data.wallet);
+    if (currentUser) currentUser.credits = Number(data.wallet || 0);
+  }
 });
 
 socket.on("joinError", (data) => {
   inMatch = false;
-  setPlayButtonState(false);
+  resetGameVisualState();
   showMenu();
+  setPlayButtonState(false);
   setMenuStatus(data?.error || "Failed to join match.", true);
 });
 
@@ -1004,8 +992,3 @@ spawnMoneySigns(menuMoneyBg, 28);
 checkSession();
 loop();
 setPlayButtonState(false);
-
-
-
-
-
