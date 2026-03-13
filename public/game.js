@@ -9,6 +9,7 @@ const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
 const landingScreen = document.getElementById("landingScreen");
 const startMenuBtn = document.getElementById("startMenuBtn");
 const colorInput = document.getElementById("colorInput");
+const colorPreviewBall = document.getElementById("colorPreviewBall");
 const moneyBg = document.getElementById("moneyBg");
 const menuBallsBg = document.getElementById("menuBallsBg");
 
@@ -16,7 +17,11 @@ const menu = document.getElementById("menu");
 const playBtn = document.getElementById("playBtn");
 const nameInput = document.getElementById("nameInput");
 const massValue = document.getElementById("massValue");
-const leaderboardEntries = document.getElementById("leaderboardEntries");
+
+const gameLeaderboard = document.getElementById("gameLeaderboard");
+const gameLeaderboardEntries = document.getElementById("gameLeaderboardEntries");
+const menuLeaderboardEntries = document.getElementById("menuLeaderboardEntries");
+
 const stakeButtons = document.querySelectorAll(".stakeBtn");
 
 const chatBox = document.getElementById("chatBox");
@@ -39,10 +44,20 @@ const withdrawBtn = document.getElementById("withdrawBtn");
 const walletStatus = document.getElementById("walletStatus");
 const menuStatus = document.getElementById("menuStatus");
 
+const toggleFriendSearchBtn = document.getElementById("toggleFriendSearchBtn");
+const friendSearchPanel = document.getElementById("friendSearchPanel");
+const friendSearchInput = document.getElementById("friendSearchInput");
+const friendSearchResults = document.getElementById("friendSearchResults");
+const friendsList = document.getElementById("friendsList");
+const friendRequestsList = document.getElementById("friendRequestsList");
+const friendsStatus = document.getElementById("friendsStatus");
+const toastContainer = document.getElementById("toastContainer");
+
 let W = (canvas.width = window.innerWidth);
 let H = (canvas.height = window.innerHeight);
 let isIntentionalReconnect = false;
 let selectedStake = 1;
+let friendSearchTimer = null;
 
 window.addEventListener("resize", () => {
   W = canvas.width = window.innerWidth;
@@ -65,7 +80,10 @@ const state = {
   cameraX: 0,
   cameraY: 0,
   zoom: 1,
-  wallet: 0
+  wallet: 0,
+  menuWalletLeaderboard: [],
+  friends: [],
+  friendRequests: []
 };
 
 const snapshots = [];
@@ -91,8 +109,7 @@ function formatBallMoney(value) {
 }
 
 function formatMoney(value) {
-  const num = Number(value || 0);
-  return `$${num.toFixed(2)}`;
+  return `$${Number(value || 0).toFixed(2)}`;
 }
 
 function waitForSocketConnect(timeoutMs = 5000) {
@@ -149,9 +166,11 @@ function escapeHtml(text) {
     .replaceAll("'", "&#039;");
 }
 
-async function api(path, body = null) {
+async function api(path, body = null, method = null) {
+  const useMethod = method || (body ? "POST" : "GET");
+
   const res = await fetch(path, {
-    method: body ? "POST" : "GET",
+    method: useMethod,
     headers: body ? { "Content-Type": "application/json" } : {},
     body: body ? JSON.stringify(body) : undefined,
     credentials: "same-origin"
@@ -189,28 +208,47 @@ function setMenuStatus(text, isError = false) {
   menuStatus.style.color = isError ? "#c62828" : "#2e7d32";
 }
 
+function setFriendsStatus(text, isError = false) {
+  if (!friendsStatus) return;
+  friendsStatus.textContent = text || "";
+  friendsStatus.style.color = isError ? "#c62828" : "#2e7d32";
+}
+
+function showToast(text) {
+  if (!toastContainer || !text) return;
+
+  const item = document.createElement("div");
+  item.className = "toastItem";
+  item.textContent = text;
+  toastContainer.appendChild(item);
+
+  setTimeout(() => {
+    item.remove();
+  }, 3500);
+}
+
 function showLandingOnly() {
-  if (landingScreen) landingScreen.classList.remove("hidden");
-  if (authPanel) authPanel.classList.add("hidden");
-  if (menu) menu.classList.add("hidden");
+  landingScreen?.classList.remove("hidden");
+  authPanel?.classList.add("hidden");
+  menu?.classList.add("hidden");
 }
 
 function showLandingWithAuth() {
-  if (landingScreen) landingScreen.classList.remove("hidden");
-  if (authPanel) authPanel.classList.remove("hidden");
-  if (menu) menu.classList.add("hidden");
+  landingScreen?.classList.remove("hidden");
+  authPanel?.classList.remove("hidden");
+  menu?.classList.add("hidden");
 }
 
 function showMenu() {
-  if (landingScreen) landingScreen.classList.add("hidden");
-  if (authPanel) authPanel.classList.add("hidden");
-  if (menu) menu.classList.remove("hidden");
+  landingScreen?.classList.add("hidden");
+  authPanel?.classList.add("hidden");
+  menu?.classList.remove("hidden");
 }
 
 function hideMenusForGame() {
-  if (landingScreen) landingScreen.classList.add("hidden");
-  if (authPanel) authPanel.classList.add("hidden");
-  if (menu) menu.classList.add("hidden");
+  landingScreen?.classList.add("hidden");
+  authPanel?.classList.add("hidden");
+  menu?.classList.add("hidden");
 }
 
 function updateWalletUi(wallet) {
@@ -225,9 +263,9 @@ function setPlayButtonState(busy = false) {
 }
 
 function setAuthButtonsLoggedIn(loggedIn) {
-  if (logoutBtn) logoutBtn.classList.toggle("hidden", !loggedIn);
-  if (loginBtn) loginBtn.classList.toggle("hidden", loggedIn);
-  if (registerBtn) registerBtn.classList.toggle("hidden", loggedIn);
+  logoutBtn?.classList.toggle("hidden", !loggedIn);
+  loginBtn?.classList.toggle("hidden", loggedIn);
+  registerBtn?.classList.toggle("hidden", loggedIn);
 }
 
 function resetGameVisualState() {
@@ -240,8 +278,8 @@ function resetGameVisualState() {
   state.cameraY = 0;
   state.zoom = 1;
   state.extracting = false;
-  massValue.textContent = "0";
-  leaderboardEntries.innerHTML = "";
+  if (massValue) massValue.textContent = "0";
+  if (gameLeaderboardEntries) gameLeaderboardEntries.innerHTML = "";
   setChatOpen(false);
 }
 
@@ -258,6 +296,7 @@ function updateAuthUi(user) {
     setAuthStatus(`Logged in as ${user.username}`);
     setMenuStatus("");
     setWalletStatus("");
+    setFriendsStatus("");
     showMenu();
   } else {
     if (authPassword) authPassword.value = "";
@@ -267,6 +306,7 @@ function updateAuthUi(user) {
     setAuthStatus("Not logged in.", false);
     setMenuStatus("");
     setWalletStatus("");
+    setFriendsStatus("");
     showLandingOnly();
   }
 }
@@ -280,6 +320,217 @@ async function refreshWallet() {
   }
 }
 
+async function refreshMenuWalletLeaderboard() {
+  const data = await api("/api/leaderboard/wallet");
+  if (data.error) return;
+
+  state.menuWalletLeaderboard = Array.isArray(data.items) ? data.items : [];
+  renderMenuWalletLeaderboard();
+}
+
+function renderMenuWalletLeaderboard() {
+  if (!menuLeaderboardEntries) return;
+
+  if (!state.menuWalletLeaderboard.length) {
+    menuLeaderboardEntries.innerHTML = `<div class="emptyCardText">No players yet.</div>`;
+    return;
+  }
+
+  menuLeaderboardEntries.innerHTML = state.menuWalletLeaderboard
+    .map(
+      (entry, i) =>
+        `<div>${i + 1}. ${escapeHtml(entry.name)} - <span style="color:#17a34a;font-weight:800">${formatMoney(entry.wallet)}</span></div>`
+    )
+    .join("");
+}
+
+async function refreshFriendsList() {
+  if (!currentUser) return;
+
+  const data = await api("/api/friends/list");
+  if (data.error) {
+    setFriendsStatus(data.error, true);
+    return;
+  }
+
+  state.friends = Array.isArray(data.items) ? data.items : [];
+  renderFriendsList();
+}
+
+async function refreshFriendRequests() {
+  if (!currentUser) return;
+
+  const data = await api("/api/friends/requests");
+  if (data.error) {
+    setFriendsStatus(data.error, true);
+    return;
+  }
+
+  state.friendRequests = Array.isArray(data.items) ? data.items : [];
+  renderFriendRequests();
+}
+
+function renderFriendsList() {
+  if (!friendsList) return;
+
+  if (!state.friends.length) {
+    friendsList.innerHTML = `<div class="emptyCardText">No friends yet.</div>`;
+    return;
+  }
+
+  friendsList.innerHTML = state.friends
+    .map(
+      (friend) => `
+        <div class="friendRow">
+          <div class="friendName">${escapeHtml(friend.username)}</div>
+          <div class="friendActions">
+            <button class="friendBtnRemove" data-remove-friend="${escapeHtml(friend.username)}" type="button">Remove</button>
+          </div>
+        </div>
+      `
+    )
+    .join("");
+
+  friendsList.querySelectorAll("[data-remove-friend]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const username = btn.getAttribute("data-remove-friend");
+      await removeFriend(username);
+    });
+  });
+}
+
+function renderFriendRequests() {
+  if (!friendRequestsList) return;
+
+  if (!state.friendRequests.length) {
+    friendRequestsList.innerHTML = `<div class="emptyCardText">No pending requests.</div>`;
+    return;
+  }
+
+  friendRequestsList.innerHTML = state.friendRequests
+    .map(
+      (req) => `
+        <div class="friendRequestRow">
+          <div class="friendName">${escapeHtml(req.fromUsername)}</div>
+          <div class="friendActions">
+            <button class="friendBtnAccept" data-accept-request="${req.id}" type="button">Accept</button>
+            <button class="friendBtnDeny" data-deny-request="${req.id}" type="button">Deny</button>
+          </div>
+        </div>
+      `
+    )
+    .join("");
+
+  friendRequestsList.querySelectorAll("[data-accept-request]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await acceptFriendRequest(Number(btn.getAttribute("data-accept-request")));
+    });
+  });
+
+  friendRequestsList.querySelectorAll("[data-deny-request]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await denyFriendRequest(Number(btn.getAttribute("data-deny-request")));
+    });
+  });
+}
+
+async function searchFriends(query) {
+  if (!friendSearchResults) return;
+
+  const q = String(query || "").trim();
+  if (!q) {
+    friendSearchResults.innerHTML = "";
+    return;
+  }
+
+  const data = await api(`/api/friends/search?q=${encodeURIComponent(q)}`, null, "GET");
+  if (data.error) {
+    setFriendsStatus(data.error, true);
+    return;
+  }
+
+  const items = Array.isArray(data.items) ? data.items : [];
+
+  if (!items.length) {
+    friendSearchResults.innerHTML = `<div class="emptyCardText">No matching accounts.</div>`;
+    return;
+  }
+
+  friendSearchResults.innerHTML = items
+    .map(
+      (user) => `
+        <div class="friendSearchRow">
+          <div class="friendName">${escapeHtml(user.username)}</div>
+          <div class="friendActions">
+            <button class="friendBtnAdd" data-add-friend="${escapeHtml(user.username)}" type="button">Add</button>
+          </div>
+        </div>
+      `
+    )
+    .join("");
+
+  friendSearchResults.querySelectorAll("[data-add-friend]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const username = btn.getAttribute("data-add-friend");
+      await sendFriendRequest(username);
+    });
+  });
+}
+
+async function sendFriendRequest(username) {
+  const data = await api("/api/friends/request", { username });
+  if (data.error) {
+    setFriendsStatus(data.error, true);
+    return;
+  }
+
+  setFriendsStatus(`Friend request sent to ${username}.`);
+  showToast(`Friend request sent to ${username}`);
+}
+
+async function acceptFriendRequest(requestId) {
+  const data = await api("/api/friends/accept", { requestId });
+  if (data.error) {
+    setFriendsStatus(data.error, true);
+    return;
+  }
+
+  setFriendsStatus("Friend request accepted.");
+  await Promise.all([refreshFriendsList(), refreshFriendRequests()]);
+}
+
+async function denyFriendRequest(requestId) {
+  const data = await api("/api/friends/deny", { requestId });
+  if (data.error) {
+    setFriendsStatus(data.error, true);
+    return;
+  }
+
+  setFriendsStatus("Friend request denied.");
+  await refreshFriendRequests();
+}
+
+async function removeFriend(username) {
+  const data = await api("/api/friends/remove", { username });
+  if (data.error) {
+    setFriendsStatus(data.error, true);
+    return;
+  }
+
+  setFriendsStatus(`${username} removed from friends.`);
+  await refreshFriendsList();
+}
+
+async function refreshMenuData() {
+  if (!currentUser) return;
+  await Promise.all([
+    refreshMenuWalletLeaderboard(),
+    refreshFriendsList(),
+    refreshFriendRequests(),
+    refreshWallet()
+  ]);
+}
+
 async function checkSession() {
   try {
     const data = await api("/api/me");
@@ -287,6 +538,7 @@ async function checkSession() {
 
     if (data.user) {
       await reconnectSocketAfterAuth();
+      await refreshMenuData();
     }
   } catch (err) {
     console.error("SESSION CHECK ERROR:", err);
@@ -373,6 +625,11 @@ function spawnBackgroundBalls(container, count) {
 
     container.appendChild(el);
   }
+}
+
+function updateColorPreview() {
+  if (!colorPreviewBall || !colorInput) return;
+  colorPreviewBall.style.background = colorInput.value || "#33c3ff";
 }
 
 function worldToScreen(x, y) {
@@ -625,11 +882,21 @@ function drawMinimap() {
 }
 
 function updateHud() {
-  massValue.textContent = Math.floor(getMyTotalMass());
-  leaderboardEntries.innerHTML = state.leaderboard
+  if (massValue) {
+    massValue.textContent = Math.floor(getMyTotalMass());
+  }
+
+  if (!gameLeaderboardEntries) return;
+
+  if (!state.leaderboard.length) {
+    gameLeaderboardEntries.innerHTML = `<div class="emptyCardText">No players yet.</div>`;
+    return;
+  }
+
+  gameLeaderboardEntries.innerHTML = state.leaderboard
     .map(
       (entry, i) =>
-        `<div>${i + 1}. ${escapeHtml(entry.name)} - <span style="color:#39ff76;font-weight:700">${formatBallMoney(entry.value || 0)}</span></div>`
+        `<div>${i + 1}. ${escapeHtml(entry.name)} - ${entry.mass} - <span style="color:#39ff76;font-weight:700">${formatBallMoney(entry.value || 0)}</span></div>`
     )
     .join("");
 }
@@ -733,7 +1000,6 @@ window.addEventListener("mousemove", (e) => {
 window.addEventListener("keydown", (e) => {
   if (e.key === "\\") {
     e.preventDefault();
-
     if (inMatch) {
       setChatOpen(!chatOpen);
     }
@@ -829,6 +1095,7 @@ async function handleAddBalance() {
     currentUser.credits = Number(data.wallet || 0);
     if (walletAmountInput) walletAmountInput.value = "";
     setWalletStatus("Balance added successfully.");
+    await refreshMenuWalletLeaderboard();
   } catch (err) {
     console.error("ADD BALANCE ERROR:", err);
     setWalletStatus("Failed to add balance.", true);
@@ -869,6 +1136,7 @@ async function handleWithdraw() {
     currentUser.credits = Number(data.wallet || 0);
     if (walletAmountInput) walletAmountInput.value = "";
     setWalletStatus("Withdrawal request submitted.");
+    await refreshMenuWalletLeaderboard();
   } catch (err) {
     console.error("WITHDRAW ERROR:", err);
     setWalletStatus("Failed to withdraw.", true);
@@ -896,6 +1164,22 @@ stakeButtons.forEach((btn) => {
     btn.classList.add("active");
     selectedStake = Number(btn.dataset.stake || 1);
   });
+});
+
+colorInput?.addEventListener("input", updateColorPreview);
+
+toggleFriendSearchBtn?.addEventListener("click", () => {
+  friendSearchPanel?.classList.toggle("hidden");
+  if (!friendSearchPanel?.classList.contains("hidden")) {
+    friendSearchInput?.focus();
+  }
+});
+
+friendSearchInput?.addEventListener("input", () => {
+  clearTimeout(friendSearchTimer);
+  friendSearchTimer = setTimeout(() => {
+    searchFriends(friendSearchInput.value);
+  }, 250);
 });
 
 if (chatInput) {
@@ -930,6 +1214,7 @@ registerBtn?.addEventListener("click", async () => {
 
     updateAuthUi(data.user);
     await reconnectSocketAfterAuth();
+    await refreshMenuData();
     setMenuStatus("Welcome bonus received: $5.00");
   } catch (err) {
     console.error("REGISTER ERROR:", err);
@@ -950,6 +1235,7 @@ loginBtn?.addEventListener("click", async () => {
 
     updateAuthUi(data.user);
     await reconnectSocketAfterAuth();
+    await refreshMenuData();
   } catch (err) {
     console.error("LOGIN ERROR:", err);
     setAuthStatus("Failed to log in.", true);
@@ -980,9 +1266,7 @@ socket.on("disconnect", () => {
   setPlayButtonState(false);
   resetGameVisualState();
 
-  if (isIntentionalReconnect) {
-    return;
-  }
+  if (isIntentionalReconnect) return;
 
   if (currentUser) {
     showMenu();
@@ -998,6 +1282,8 @@ socket.on("joined", (data) => {
   setPlayButtonState(false);
   setMenuStatus("");
   setWalletStatus("");
+
+  if (gameLeaderboard) gameLeaderboard.classList.remove("hidden");
 
   if (typeof data?.wallet !== "undefined") {
     updateWalletUi(data.wallet);
@@ -1019,7 +1305,7 @@ socket.on("dead", async (data) => {
   showMenu();
   setPlayButtonState(false);
   setMenuStatus(data?.message || "You died and returned to the menu.", true);
-  await refreshWallet();
+  await refreshMenuData();
 });
 
 socket.on("chatHistory", (history) => {
@@ -1056,12 +1342,26 @@ socket.on("extracted", async (data) => {
   showMenu();
   setPlayButtonState(false);
   setMenuStatus(data?.message || "You extracted from the match.");
-  await refreshWallet();
+  await refreshMenuData();
 });
 
 socket.on("extractFailed", (data) => {
   state.extracting = false;
   setMenuStatus(data?.error || "Extraction failed.", true);
+});
+
+socket.on("friendNotification", async (payload) => {
+  if (!payload || !payload.type) return;
+
+  if (payload.type === "friend_request") {
+    showToast(`${payload.fromUsername} sent you a friend request`);
+    await refreshFriendRequests();
+  }
+
+  if (payload.type === "friend_accept") {
+    showToast(`${payload.fromUsername} accepted your friend request`);
+    await refreshFriendsList();
+  }
 });
 
 setInterval(() => {
@@ -1101,6 +1401,7 @@ function loop() {
 
 spawnMoneySigns(moneyBg, 28);
 spawnBackgroundBalls(menuBallsBg, 24);
+updateColorPreview();
 checkSession();
 loop();
 setPlayButtonState(false);
