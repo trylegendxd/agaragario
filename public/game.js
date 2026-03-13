@@ -10,13 +10,14 @@ const landingScreen = document.getElementById("landingScreen");
 const startMenuBtn = document.getElementById("startMenuBtn");
 const colorInput = document.getElementById("colorInput");
 const moneyBg = document.getElementById("moneyBg");
-const menuMoneyBg = document.getElementById("menuMoneyBg");
+const menuBallsBg = document.getElementById("menuBallsBg");
 
 const menu = document.getElementById("menu");
 const playBtn = document.getElementById("playBtn");
 const nameInput = document.getElementById("nameInput");
 const massValue = document.getElementById("massValue");
 const leaderboardEntries = document.getElementById("leaderboardEntries");
+const stakeButtons = document.querySelectorAll(".stakeBtn");
 
 const chatBox = document.getElementById("chatBox");
 const chatMessagesEl = document.getElementById("chatMessages");
@@ -41,6 +42,7 @@ const menuStatus = document.getElementById("menuStatus");
 let W = (canvas.width = window.innerWidth);
 let H = (canvas.height = window.innerHeight);
 let isIntentionalReconnect = false;
+let selectedStake = 1;
 
 window.addEventListener("resize", () => {
   W = canvas.width = window.innerWidth;
@@ -68,6 +70,9 @@ const state = {
 
 const snapshots = [];
 const INTERPOLATION_DELAY = 16;
+const EXTRACTION_SECONDS = 6;
+const EXTRACTION_TICKS = 6 * 45;
+
 let isJoinInFlight = false;
 let inMatch = false;
 let chatOpen = false;
@@ -83,6 +88,11 @@ function lerp(a, b, t) {
 
 function formatBallMoney(value) {
   return `$${Number(value || 0).toFixed(2)}`;
+}
+
+function formatMoney(value) {
+  const num = Number(value || 0);
+  return `$${num.toFixed(2)}`;
 }
 
 function waitForSocketConnect(timeoutMs = 5000) {
@@ -161,35 +171,6 @@ async function api(path, body = null) {
   return data;
 }
 
-function drawExtractionIndicator() {
-  const me = getMyPlayer();
-  if (!me || !me.extracting) return;
-
-  const center = getMyCenter();
-  const s = worldToScreen(center.x, center.y);
-
-  const progress = Math.max(0, Math.min(1, (me.extractTicks || 0) / (6 * 45)));
-  const radius = 42;
-
-  ctx.beginPath();
-  ctx.arc(s.x, s.y, radius, 0, Math.PI * 2);
-  ctx.strokeStyle = "rgba(0,0,0,0.16)";
-  ctx.lineWidth = 6;
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.arc(s.x, s.y, radius, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
-  ctx.strokeStyle = "#39ff76";
-  ctx.lineWidth = 7;
-  ctx.stroke();
-
-  ctx.fillStyle = "#39ff76";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = "bold 14px Arial";
-  ctx.fillText(`Extracting ${Math.ceil((1 - progress) * 6)}s`, s.x, s.y - 58);
-}
-
 function setAuthStatus(text, isError = false) {
   if (!authStatus) return;
   authStatus.textContent = text || "";
@@ -206,11 +187,6 @@ function setMenuStatus(text, isError = false) {
   if (!menuStatus) return;
   menuStatus.textContent = text || "";
   menuStatus.style.color = isError ? "#c62828" : "#2e7d32";
-}
-
-function formatMoney(value) {
-  const num = Number(value || 0);
-  return `$${num.toFixed(2)}`;
 }
 
 function showLandingOnly() {
@@ -245,7 +221,7 @@ function updateWalletUi(wallet) {
 function setPlayButtonState(busy = false) {
   if (!playBtn) return;
   playBtn.disabled = busy;
-  playBtn.textContent = busy ? "Loading..." : "Enter Game";
+  playBtn.textContent = busy ? "Loading..." : "JOIN GAME";
 }
 
 function setAuthButtonsLoggedIn(loggedIn) {
@@ -263,10 +239,10 @@ function resetGameVisualState() {
   state.cameraX = 0;
   state.cameraY = 0;
   state.zoom = 1;
+  state.extracting = false;
   massValue.textContent = "0";
   leaderboardEntries.innerHTML = "";
   setChatOpen(false);
-  state.extracting = false;
 }
 
 function updateAuthUi(user) {
@@ -375,6 +351,30 @@ function spawnMoneySigns(container, count) {
   }
 }
 
+function spawnBackgroundBalls(container, count) {
+  if (!container) return;
+
+  container.innerHTML = "";
+  const colors = ["#4db2ff", "#3bd36c", "#ffca28", "#b27cff", "#ff7aa8"];
+
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement("div");
+    el.className = "bgBall";
+
+    const size = 26 + Math.random() * 78;
+    const color = colors[Math.floor(Math.random() * colors.length)];
+
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    el.style.left = `${Math.random() * 100}%`;
+    el.style.background = `radial-gradient(circle at 30% 30%, #ffffff, ${color})`;
+    el.style.animationDuration = `${9 + Math.random() * 10}s`;
+    el.style.animationDelay = `${Math.random() * 8}s`;
+
+    container.appendChild(el);
+  }
+}
+
 function worldToScreen(x, y) {
   return {
     x: (x - state.cameraX) * state.zoom + W / 2,
@@ -429,6 +429,35 @@ function updateCamera() {
 
   state.zoom += (targetZoom - state.zoom) * 0.12;
   state.zoom = Math.max(0.02, Math.min(1.2, state.zoom));
+}
+
+function drawExtractionIndicator() {
+  const me = getMyPlayer();
+  if (!me || !me.extracting) return;
+
+  const center = getMyCenter();
+  const s = worldToScreen(center.x, center.y);
+
+  const progress = Math.max(0, Math.min(1, (me.extractTicks || 0) / EXTRACTION_TICKS));
+  const radius = 42;
+
+  ctx.beginPath();
+  ctx.arc(s.x, s.y, radius, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(0,0,0,0.16)";
+  ctx.lineWidth = 6;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(s.x, s.y, radius, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+  ctx.strokeStyle = "#39ff76";
+  ctx.lineWidth = 7;
+  ctx.stroke();
+
+  ctx.fillStyle = "#39ff76";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = "bold 14px Arial";
+  ctx.fillText(`Extracting ${Math.ceil((1 - progress) * EXTRACTION_SECONDS)}s`, s.x, s.y - 58);
 }
 
 function drawGrid() {
@@ -712,8 +741,8 @@ window.addEventListener("keydown", (e) => {
   }
 
   if (e.key === "q" || e.key === "Q") {
-  state.extracting = true;
-}
+    state.extracting = true;
+  }
 
   if (chatOpen) return;
   if (!inMatch) return;
@@ -749,7 +778,7 @@ async function joinGame() {
   setWalletStatus("");
 
   try {
-    const data = await api("/api/game/enter", {});
+    const data = await api("/api/game/enter", { stake: selectedStake });
 
     if (data.error) {
       setMenuStatus(data.error, true);
@@ -859,6 +888,14 @@ nameInput?.addEventListener("keydown", (e) => {
 
 startMenuBtn?.addEventListener("click", () => {
   showLandingWithAuth();
+});
+
+stakeButtons.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    stakeButtons.forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    selectedStake = Number(btn.dataset.stake || 1);
+  });
 });
 
 if (chatInput) {
@@ -1063,9 +1100,7 @@ function loop() {
 }
 
 spawnMoneySigns(moneyBg, 28);
-spawnMoneySigns(menuMoneyBg, 28);
+spawnBackgroundBalls(menuBallsBg, 24);
 checkSession();
 loop();
 setPlayButtonState(false);
-
-
