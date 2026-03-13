@@ -37,7 +37,7 @@ canvas {
 .menuShell {
   position: relative;
   z-index: 2;
-  width: min(1380px, calc(100vw - 40px));
+  width: min(1440px, calc(100vw - 40px));
   display: grid;
   grid-template-columns: 1fr 420px 1fr;
   gap: 18px;
@@ -79,6 +79,17 @@ canvas {
   border: 1px solid #bcebcf;
 }
 
+.miniCardBtn {
+  padding: 7px 12px;
+  border: 1px solid #cfdbff;
+  border-radius: 999px;
+  background: #eef3ff;
+  color: #3459ff;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
 .mainPlayCard {
   padding: 22px;
   text-align: center;
@@ -105,7 +116,8 @@ canvas {
 
 .mainPlayCard input,
 .walletCard input,
-.authPanel input {
+.authPanel input,
+.friendSearchPanel input {
   width: 100%;
   box-sizing: border-box;
   padding: 13px 14px;
@@ -120,37 +132,10 @@ canvas {
 
 .mainPlayCard input:focus,
 .walletCard input:focus,
-.authPanel input:focus {
+.authPanel input:focus,
+.friendSearchPanel input:focus {
   border-color: #8fb8ea;
   box-shadow: 0 0 0 4px rgba(77, 178, 255, 0.12);
-}
-
-.colorRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 12px;
-  padding: 12px 14px;
-  border: 1px solid #d6e1ef;
-  border-radius: 14px;
-  background: #fff;
-}
-
-.colorRow label {
-  color: #33455d;
-  font-size: 15px;
-  font-weight: 700;
-}
-
-#colorInput {
-  width: 56px;
-  height: 38px;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-  margin-top: 0;
-  padding: 0;
 }
 
 .stakeSection {
@@ -262,16 +247,18 @@ canvas {
 .walletStatus,
 .menuStatus,
 .emptyCardText,
-.smallInfo {
+.smallInfo,
+.friendsStatus {
   margin-top: 12px;
   text-align: center;
   color: #687b92;
   font-size: 13px;
 }
 
-.infoCard {
-  min-height: 180px;
-  padding: 0 20px 20px;
+.leaderboardCard,
+.friendsCard,
+.customizeCard {
+  overflow: hidden;
 }
 
 .leaderboardCard {
@@ -286,6 +273,141 @@ canvas {
 
 .leaderboardEntries div {
   margin: 8px 0;
+}
+
+.friendsCard {
+  padding-bottom: 16px;
+}
+
+.friendsSection {
+  padding: 0 20px;
+  margin-bottom: 14px;
+}
+
+.friendsSubTitle {
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #5f7289;
+  text-transform: uppercase;
+}
+
+.friendsList,
+.friendRequestsList,
+.friendSearchResults {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.friendSearchPanel {
+  padding: 0 20px 14px;
+}
+
+.friendRow,
+.friendRequestRow,
+.friendSearchRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #dce6f2;
+  border-radius: 14px;
+  background: #f9fbff;
+}
+
+.friendName {
+  font-size: 14px;
+  font-weight: 700;
+  color: #24364d;
+}
+
+.friendActions {
+  display: flex;
+  gap: 8px;
+}
+
+.friendBtnAccept,
+.friendBtnAdd,
+.friendBtnDeny,
+.friendBtnRemove {
+  border: 0;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.friendBtnAdd,
+.friendBtnAccept {
+  background: #e8fff1;
+  color: #07954b;
+}
+
+.friendBtnDeny,
+.friendBtnRemove {
+  background: #fff0f0;
+  color: #cc2c2c;
+}
+
+.customizeBody {
+  padding: 0 20px 20px;
+}
+
+.colorRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+  padding: 12px 14px;
+  border: 1px solid #d6e1ef;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.colorRow label {
+  color: #33455d;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+#colorInput {
+  width: 56px;
+  height: 38px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  margin-top: 0;
+  padding: 0;
+}
+
+.colorPreviewWrap {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px;
+  border-radius: 16px;
+  background: #f7fbff;
+  border: 1px solid #dce7f3;
+}
+
+.colorPreviewLabel {
+  font-size: 14px;
+  font-weight: 800;
+  color: #4c6179;
+}
+
+.colorPreviewBall {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #33c3ff;
+  border: 3px solid rgba(0, 0, 0, 0.08);
+  box-shadow: inset 0 3px 8px rgba(255, 255, 255, 0.28);
 }
 
 .ballsBg {
@@ -351,6 +473,28 @@ canvas {
   line-height: 1;
   font-weight: 900;
   color: #31455f;
+}
+
+.gameLeaderboard {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  width: 250px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid #d3dbe6;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 10px 24px rgba(59, 92, 141, 0.12);
+}
+
+.leaderboardTitle {
+  background: #f4f8fd;
+  border-bottom: 1px solid #dde6f0;
+  padding: 10px 12px;
+  font-size: 24px;
+  font-weight: 900;
+  color: #4b5f78;
+  text-align: center;
 }
 
 .chatBox {
@@ -495,6 +639,30 @@ canvas {
   min-height: 18px;
 }
 
+.toastContainer {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.toastItem {
+  min-width: 240px;
+  max-width: 380px;
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: rgba(28, 39, 53, 0.92);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
+}
+
 @media (max-width: 1180px) {
   .menuShell {
     grid-template-columns: 1fr;
@@ -514,5 +682,9 @@ canvas {
 
   .stakeButtons {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .gameLeaderboard {
+    width: 210px;
   }
 }
