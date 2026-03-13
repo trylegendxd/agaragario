@@ -7,6 +7,8 @@ const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcryptjs");
 const { Pool } = require("pg");
 
+const WORLD_RADIUS = WORLD_SIZE / 2;
+
 const app = express();
 app.set("trust proxy", 1);
 
@@ -145,9 +147,10 @@ function randomColor() {
 }
 
 function randomSpawnCell() {
+  const p = randomPointInCircle(WORLD_RADIUS - 400);
   return {
-    x: rand(-WORLD_SIZE / 2 + 400, WORLD_SIZE / 2 - 400),
-    y: rand(-WORLD_SIZE / 2 + 400, WORLD_SIZE / 2 - 400),
+    x: p.x,
+    y: p.y,
     mass: START_MASS,
     vx: 0,
     vy: 0,
@@ -156,10 +159,11 @@ function randomSpawnCell() {
 }
 
 function createFood() {
+  const p = randomPointInCircle(WORLD_RADIUS - 8);
   return {
     id: Math.random().toString(36).slice(2),
-    x: rand(-WORLD_SIZE / 2, WORLD_SIZE / 2),
-    y: rand(-WORLD_SIZE / 2, WORLD_SIZE / 2),
+    x: p.x,
+    y: p.y,
     vx: 0,
     vy: 0,
     r: 8,
@@ -169,11 +173,36 @@ function createFood() {
 }
 
 function createVirus() {
+  const p = randomPointInCircle(WORLD_RADIUS - 48);
   return {
     id: Math.random().toString(36).slice(2),
-    x: rand(-WORLD_SIZE / 2, WORLD_SIZE / 2),
-    y: rand(-WORLD_SIZE / 2, WORLD_SIZE / 2),
+    x: p.x,
+    y: p.y,
     r: 48
+  };
+}
+
+function randomPointInCircle(maxRadius) {
+  const angle = Math.random() * Math.PI * 2;
+  const radius = Math.sqrt(Math.random()) * maxRadius;
+  return {
+    x: Math.cos(angle) * radius,
+    y: Math.sin(angle) * radius
+  };
+}
+
+function clampToWorldCircle(x, y, radius = 0) {
+  const maxDist = Math.max(0, WORLD_RADIUS - radius);
+  const dist = Math.hypot(x, y) || 1;
+
+  if (dist <= maxDist) {
+    return { x, y };
+  }
+
+  const scale = maxDist / dist;
+  return {
+    x: x * scale,
+    y: y * scale
   };
 }
 
@@ -213,6 +242,7 @@ function createHumanPlayer(socketId, user, payload) {
     mouse: { x: 0, y: 0 },
     wantsSplit: false,
     wantsEject: false,
+    cashValue: GAME_ENTRY_COST,
     cells: [randomSpawnCell()],
     alive: true,
     joinedAt: Date.now()
@@ -228,6 +258,7 @@ function createBot(index) {
     mouse: { x: 0, y: 0 },
     wantsSplit: false,
     wantsEject: false,
+    cashValue: 0,
     cells: [randomSpawnCell()],
     alive: true,
     botIndex: index
@@ -811,11 +842,11 @@ function moveEntity(entity) {
     }
   }
 
-  for (const cell of entity.cells) {
+    for (const cell of entity.cells) {
     const r = radiusFromMass(cell.mass);
-    const bound = WORLD_SIZE / 2 - r;
-    cell.x = clamp(cell.x, -bound, bound);
-    cell.y = clamp(cell.y, -bound, bound);
+    const clamped = clampToWorldCircle(cell.x, cell.y, r);
+    cell.x = clamped.x;
+    cell.y = clamped.y;
   }
 }
 
@@ -904,8 +935,9 @@ function moveEjectedFood() {
     f.vx *= 0.92;
     f.vy *= 0.92;
 
-    f.x = clamp(f.x, -WORLD_SIZE / 2, WORLD_SIZE / 2);
-    f.y = clamp(f.y, -WORLD_SIZE / 2, WORLD_SIZE / 2);
+    const clamped = clampToWorldCircle(f.x, f.y, f.r || 8);
+    f.x = clamped.x;
+    f.y = clamped.y;
 
     if (Math.abs(f.vx) < 0.05) f.vx = 0;
     if (Math.abs(f.vy) < 0.05) f.vy = 0;
@@ -929,16 +961,19 @@ function handleFoodEating(entity) {
 
   for (const cell of entity.cells) {
     const r = radiusFromMass(cell.mass);
-    const rr = (r + (cell.mass >= EJECT_ORB_MASS ? EJECT_ORB_RADIUS : 8)) ** 2;
 
     for (let i = food.length - 1; i >= 0; i--) {
       if (isBot(entity) && botRemainingFoodGrowth <= 0) break;
 
       const f = food[i];
       const fr = typeof f.r === "number" ? f.r : 8;
-      const eatDistSq = (r + fr) * (r + fr);
+      const quickRange = r + fr + 24;
 
-      if (Math.abs(cell.x - f.x) > 160 || Math.abs(cell.y - f.y) > 160) continue;
+      if (Math.abs(cell.x - f.x) > quickRange || Math.abs(cell.y - f.y) > quickRange) {
+        continue;
+      }
+
+      const eatDistSq = (r + fr) * (r + fr);
 
       if (distanceSq(cell.x, cell.y, f.x, f.y) < eatDistSq) {
         if (isBot(entity)) {
@@ -1155,11 +1190,14 @@ function handleEntityVsEntity() {
           const br = radiusFromMass(bc.mass);
           const d = distance(ac.x, ac.y, bc.x, bc.y);
 
-          if (ac.mass > bc.mass * 1.12 && d < ar - br * 0.3) {
+                   if (ac.mass > bc.mass * 1.12 && d < ar - br * 0.3) {
             ac.mass += bc.mass;
             b.cells.splice(bi, 1);
 
             if (b.cells.length === 0) {
+              a.cashValue = Number(a.cashValue || 0) + Number(b.cashValue || 0);
+              b.cashValue = 0;
+
               if (isHuman(b)) eliminateHuman(b, a.name);
               else if (isBot(b)) eliminateBot(b.botIndex);
             }
@@ -1168,6 +1206,9 @@ function handleEntityVsEntity() {
             a.cells.splice(ai, 1);
 
             if (a.cells.length === 0) {
+              b.cashValue = Number(b.cashValue || 0) + Number(a.cashValue || 0);
+              a.cashValue = 0;
+
               if (isHuman(a)) eliminateHuman(a, b.name);
               else if (isBot(a)) eliminateBot(a.botIndex);
             }
@@ -1189,7 +1230,8 @@ function buildLeaderboard() {
   return all
     .map((entity) => ({
       name: entity.name,
-      mass: Math.round(totalMass(entity))
+      mass: Math.round(totalMass(entity)),
+      value: Number(entity.cashValue || 0)
     }))
     .sort((a, b) => b.mass - a.mass)
     .slice(0, 10);
@@ -1242,11 +1284,12 @@ async function buildSnapshotFor(targetPlayer) {
       continue;
     }
 
-    visiblePlayers.push({
+        visiblePlayers.push({
       id: entity.id,
       name: entity.name,
       color: entity.color,
       totalMass: Math.round(totalMass(entity)),
+      cashValue: Number(entity.cashValue || 0),
       isBot: isBot(entity),
       cells: entity.cells.map((c) => ({
         x: c.x,
@@ -1481,3 +1524,4 @@ start().catch((err) => {
   console.error("STARTUP ERROR:", err);
   process.exit(1);
 });
+
