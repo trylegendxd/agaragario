@@ -46,13 +46,14 @@ const GAME_ENTRY_COST = 1;
 const REGISTER_BONUS = 5;
 const BOT_FOOD_CAP = 200;
 
-/* new gameplay constants */
 const SPLIT_MERGE_DELAY_TICKS = 35 * TICK_RATE;
 const SPLIT_LAUNCH_SPEED = 34;
 const EJECT_LAUNCH_DISTANCE = 100;
 const EJECT_LAUNCH_SPEED = 26;
-const SELF_SEPARATION_FACTOR = 0.9;
-const MERGE_ATTRACTION_FACTOR = 0.018;
+const TOUCH_SEPARATION_FACTOR = 1.0;
+const PREMERGE_ATTRACTION_FACTOR = 0.006;
+const POSTMERGE_ATTRACTION_FACTOR = 0.04;
+const EJECT_ORB_MASS = START_MASS;
 
 const players = new Map();
 const playerByUserId = new Map();
@@ -60,6 +61,12 @@ const food = [];
 const viruses = [];
 const bots = [];
 const chatMessages = [];
+
+function radiusFromMass(mass) {
+  return Math.sqrt(mass) * 4.8;
+}
+
+const EJECT_ORB_RADIUS = radiusFromMass(EJECT_ORB_MASS);
 
 const sessionMiddleware = session({
   store: new PgSession({
@@ -130,10 +137,6 @@ function distanceSq(ax, ay, bx, by) {
   const dx = ax - bx;
   const dy = ay - by;
   return dx * dx + dy * dy;
-}
-
-function radiusFromMass(mass) {
-  return Math.sqrt(mass) * 4.8;
 }
 
 function randomColor() {
@@ -760,16 +763,17 @@ function moveEntity(entity) {
     for (let j = i + 1; j < entity.cells.length; j++) {
       const a = entity.cells[i];
       const b = entity.cells[j];
+
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const d = Math.hypot(dx, dy) || 1;
 
       const ar = radiusFromMass(a.mass);
       const br = radiusFromMass(b.mass);
-      const desiredSeparation = (ar + br) * SELF_SEPARATION_FACTOR;
+      const desiredSeparation = (ar + br) * TOUCH_SEPARATION_FACTOR;
 
       if (d < desiredSeparation) {
-        const push = (desiredSeparation - d) * 0.12;
+        const push = (desiredSeparation - d) * 0.5;
         const nx = dx / d;
         const ny = dy / d;
 
@@ -777,17 +781,32 @@ function moveEntity(entity) {
         a.y -= ny * push;
         b.x += nx * push;
         b.y += ny * push;
+
+        const relVx = b.vx - a.vx;
+        const relVy = b.vy - a.vy;
+        const inwardSpeed = relVx * nx + relVy * ny;
+
+        if (inwardSpeed < 0) {
+          const correction = inwardSpeed * 0.5;
+          a.vx += nx * correction;
+          a.vy += ny * correction;
+          b.vx -= nx * correction;
+          b.vy -= ny * correction;
+        }
       }
 
-      if (a.mergeTimer <= 0 && b.mergeTimer <= 0) {
+      if (d > desiredSeparation) {
         const nx = dx / d;
         const ny = dy / d;
-        const attract = Math.max(0, d - (ar + br) * 0.35) * MERGE_ATTRACTION_FACTOR;
+        const attraction =
+          a.mergeTimer > 0 || b.mergeTimer > 0
+            ? PREMERGE_ATTRACTION_FACTOR
+            : POSTMERGE_ATTRACTION_FACTOR;
 
-        a.vx += nx * attract;
-        a.vy += ny * attract;
-        b.vx -= nx * attract;
-        b.vy -= ny * attract;
+        a.vx += nx * attraction;
+        a.vy += ny * attraction;
+        b.vx -= nx * attraction;
+        b.vy -= ny * attraction;
       }
     }
   }
@@ -847,8 +866,9 @@ function ejectMass(entity) {
   const dirY = entity.mouse.y / len;
 
   for (const cell of entity.cells) {
-    if (cell.mass <= 20) continue;
-    cell.mass -= 1;
+    if (cell.mass <= EJECT_ORB_MASS + 10) continue;
+
+    cell.mass -= EJECT_ORB_MASS;
 
     const px = clamp(
       cell.x + dirX * (radiusFromMass(cell.mass) + EJECT_LAUNCH_DISTANCE),
@@ -867,9 +887,9 @@ function ejectMass(entity) {
       y: py,
       vx: dirX * EJECT_LAUNCH_SPEED,
       vy: dirY * EJECT_LAUNCH_SPEED,
-      r: 8,
+      r: EJECT_ORB_RADIUS,
       color: entity.color,
-      mass: 1
+      mass: EJECT_ORB_MASS
     });
   }
 }
@@ -909,15 +929,18 @@ function handleFoodEating(entity) {
 
   for (const cell of entity.cells) {
     const r = radiusFromMass(cell.mass);
-    const rr = (r + 8) * (r + 8);
+    const rr = (r + (cell.mass >= EJECT_ORB_MASS ? EJECT_ORB_RADIUS : 8)) ** 2;
 
     for (let i = food.length - 1; i >= 0; i--) {
       if (isBot(entity) && botRemainingFoodGrowth <= 0) break;
 
       const f = food[i];
-      if (Math.abs(cell.x - f.x) > 120 || Math.abs(cell.y - f.y) > 120) continue;
+      const fr = typeof f.r === "number" ? f.r : 8;
+      const eatDistSq = (r + fr) * (r + fr);
 
-      if (distanceSq(cell.x, cell.y, f.x, f.y) < rr) {
+      if (Math.abs(cell.x - f.x) > 160 || Math.abs(cell.y - f.y) > 160) continue;
+
+      if (distanceSq(cell.x, cell.y, f.x, f.y) < eatDistSq) {
         if (isBot(entity)) {
           const gain = Math.min(f.mass, botRemainingFoodGrowth);
           if (gain <= 0) continue;
@@ -995,11 +1018,14 @@ function handleSelfMerge(entity) {
     for (let j = i + 1; j < entity.cells.length; j++) {
       const a = entity.cells[i];
       const b = entity.cells[j];
-      const d = distance(a.x, a.y, b.x, b.y);
 
       if (a.mergeTimer > 0 || b.mergeTimer > 0) continue;
 
-      if (d < Math.max(radiusFromMass(a.mass), radiusFromMass(b.mass)) * 0.35) {
+      const d = distance(a.x, a.y, b.x, b.y);
+      const ar = radiusFromMass(a.mass);
+      const br = radiusFromMass(b.mass);
+
+      if (d <= ar + br + 1) {
         a.mass += b.mass;
         a.vx = (a.vx + b.vx) * 0.5;
         a.vy = (a.vy + b.vy) * 0.5;
