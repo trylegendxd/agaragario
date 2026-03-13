@@ -80,6 +80,10 @@ function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
+function formatBallMoney(value) {
+  return `$${Number(value || 0).toFixed(2)}`;
+}
+
 function waitForSocketConnect(timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     if (socket.connected) {
@@ -398,35 +402,36 @@ function updateCamera() {
 
 function drawGrid() {
   const grid = 50 * state.zoom;
-  if (grid < 8) return;
+  if (grid >= 8) {
+    const offsetX = ((-state.cameraX * state.zoom) % grid + grid) % grid;
+    const offsetY = ((-state.cameraY * state.zoom) % grid + grid) % grid;
 
-  const offsetX = ((-state.cameraX * state.zoom) % grid + grid) % grid;
-  const offsetY = ((-state.cameraY * state.zoom) % grid + grid) % grid;
+    ctx.strokeStyle = "#ececec";
+    ctx.lineWidth = 1;
 
-  ctx.strokeStyle = "#ececec";
-  ctx.lineWidth = 1;
+    for (let x = offsetX; x <= W; x += grid) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, H);
+      ctx.stroke();
+    }
 
-  for (let x = offsetX; x <= W; x += grid) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, H);
-    ctx.stroke();
+    for (let y = offsetY; y <= H; y += grid) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(W, y);
+      ctx.stroke();
+    }
   }
 
-  for (let y = offsetY; y <= H; y += grid) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(W, y);
-    ctx.stroke();
-  }
+  const center = worldToScreen(0, 0);
+  const radius = (state.worldSize / 2) * state.zoom;
 
-  const left = (-state.worldSize / 2 - state.cameraX) * state.zoom + W / 2;
-  const top = (-state.worldSize / 2 - state.cameraY) * state.zoom + H / 2;
-  const size = state.worldSize * state.zoom;
-
+  ctx.beginPath();
+  ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
   ctx.strokeStyle = "#cfcfcf";
   ctx.lineWidth = 3;
-  ctx.strokeRect(left, top, size, size);
+  ctx.stroke();
 }
 
 function drawFood() {
@@ -480,6 +485,9 @@ function drawPlayers() {
   });
 
   for (const player of sorted) {
+    const totalMass = player.cells.reduce((s, c) => s + c.mass, 0) || 1;
+    const totalValue = Number(player.cashValue || 0);
+
     for (const cell of player.cells) {
       const s = worldToScreen(cell.x, cell.y);
       const r = radiusFromMass(cell.mass) * state.zoom;
@@ -495,13 +503,17 @@ function drawPlayers() {
       ctx.stroke();
 
       if (r > 18) {
+        const cellValue = totalValue * (cell.mass / totalMass);
+
         ctx.fillStyle = "#ffffff";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.font = `${Math.max(12, r * 0.28)}px Arial`;
-        ctx.fillText(player.name, s.x, s.y - 2);
-        ctx.font = `${Math.max(10, r * 0.2)}px Arial`;
-        ctx.fillText(Math.floor(cell.mass), s.x, s.y + 16);
+        ctx.fillText(player.name, s.x, s.y - 8);
+
+        ctx.fillStyle = "#39ff76";
+        ctx.font = `${Math.max(10, r * 0.19)}px Arial`;
+        ctx.fillText(formatBallMoney(cellValue), s.x, s.y + 14);
       }
     }
   }
@@ -555,7 +567,10 @@ function drawMinimap() {
 function updateHud() {
   massValue.textContent = Math.floor(getMyTotalMass());
   leaderboardEntries.innerHTML = state.leaderboard
-    .map((entry, i) => `<div>${i + 1}. ${escapeHtml(entry.name)} - ${entry.mass}</div>`)
+    .map(
+      (entry, i) =>
+        `<div>${i + 1}. ${escapeHtml(entry.name)} - <span style="color:#39ff76;font-weight:700">${formatBallMoney(entry.value || 0)}</span></div>`
+    )
     .join("");
 }
 
@@ -582,6 +597,7 @@ function cloneStateForSnapshot(serverState) {
       name: p.name,
       color: p.color,
       isBot: !!p.isBot,
+      cashValue: Number(p.cashValue || 0),
       totalMass: p.totalMass,
       cells: (p.cells || []).map((c) => ({ ...c }))
     }))
@@ -992,3 +1008,4 @@ spawnMoneySigns(menuMoneyBg, 28);
 checkSession();
 loop();
 setPlayButtonState(false);
+
