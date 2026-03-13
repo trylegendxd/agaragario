@@ -7,8 +7,6 @@ const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcryptjs");
 const { Pool } = require("pg");
 
-const WORLD_RADIUS = WORLD_SIZE / 2;
-
 const app = express();
 app.set("trust proxy", 1);
 
@@ -36,6 +34,7 @@ const pool = new Pool({
 });
 
 const WORLD_SIZE = 12000;
+const WORLD_RADIUS = WORLD_SIZE / 2;
 const FOOD_COUNT = 3000;
 const VIRUS_COUNT = 35;
 const BOT_COUNT = 8;
@@ -1524,4 +1523,5 @@ start().catch((err) => {
   console.error("STARTUP ERROR:", err);
   process.exit(1);
 });
+
 
