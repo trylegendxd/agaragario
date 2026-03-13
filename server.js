@@ -57,6 +57,8 @@ const TOUCH_SEPARATION_FACTOR = 1.0;
 const PREMERGE_ATTRACTION_FACTOR = 0.006;
 const POSTMERGE_ATTRACTION_FACTOR = 0.04;
 const EJECT_ORB_MASS = START_MASS;
+const EXTRACTION_HOLD_TICKS = 6 * TICK_RATE;
+const EXTRACTION_PAYOUT_RATE = 0.95;
 
 const players = new Map();
 const playerByUserId = new Map();
@@ -1622,6 +1624,7 @@ start().catch((err) => {
   console.error("STARTUP ERROR:", err);
   process.exit(1);
 });
+
 
 
 
