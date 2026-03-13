@@ -57,8 +57,12 @@ const EJECT_ORB_MASS = START_MASS;
 const EXTRACTION_HOLD_TICKS = 6 * TICK_RATE;
 const EXTRACTION_PAYOUT_RATE = 0.95;
 
+const ALLOWED_STAKES = [1, 5, 10, 20];
+
 const players = new Map();
 const playerByUserId = new Map();
+const socketsByUserId = new Map();
+
 const food = [];
 const viruses = [];
 const bots = [];
@@ -120,6 +124,27 @@ async function initDb() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_credit_transactions_user_id
     ON credit_transactions(user_id)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS friend_requests (
+      id BIGSERIAL PRIMARY KEY,
+      from_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      to_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (from_user_id, to_user_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS friends (
+      id BIGSERIAL PRIMARY KEY,
+      user_a BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_b BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (user_a, user_b)
+    )
   `);
 }
 
@@ -485,6 +510,16 @@ async function requireAuth(req, res, next) {
   }
 }
 
+function sendFriendNotificationToUser(userId, payload) {
+  const socketId = socketsByUserId.get(Number(userId));
+  if (!socketId) return;
+
+  const sock = io.sockets.sockets.get(socketId);
+  if (!sock) return;
+
+  sock.emit("friendNotification", payload);
+}
+
 app.post("/api/register", async (req, res) => {
   try {
     const username = String(req.body?.username || "").trim();
@@ -590,6 +625,28 @@ app.get("/api/balance", requireAuth, (req, res) => {
   res.json({ ok: true, wallet: Number(req.user.credits || 0) });
 });
 
+app.get("/api/leaderboard/wallet", async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT username, credits
+      FROM users
+      ORDER BY credits DESC, username ASC
+      LIMIT 10
+    `);
+
+    res.json({
+      ok: true,
+      items: rows.map((row) => ({
+        name: row.username,
+        wallet: Number(row.credits || 0)
+      }))
+    });
+  } catch (err) {
+    console.error("WALLET LEADERBOARD ERROR:", err);
+    res.status(500).json({ error: "Failed to load wallet leaderboard." });
+  }
+});
+
 app.get("/api/credits/history", requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -692,6 +749,253 @@ app.post("/api/payments/solana/quote", requireAuth, (req, res) => {
   });
 });
 
+app.get("/api/friends/search", requireAuth, async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    if (!q) return res.json({ ok: true, items: [] });
+
+    const { rows } = await pool.query(
+      `
+      SELECT id, username
+      FROM users
+      WHERE username ILIKE $1
+        AND id <> $2
+      ORDER BY username ASC
+      LIMIT 10
+      `,
+      [`%${q}%`, req.user.id]
+    );
+
+    res.json({
+      ok: true,
+      items: rows.map((r) => ({
+        id: Number(r.id),
+        username: r.username
+      }))
+    });
+  } catch (err) {
+    console.error("FRIEND SEARCH ERROR:", err);
+    res.status(500).json({ error: "Failed to search users." });
+  }
+});
+
+app.get("/api/friends/list", requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT u.id, u.username
+      FROM friends f
+      JOIN users u
+        ON u.id = CASE
+          WHEN f.user_a = $1 THEN f.user_b
+          ELSE f.user_a
+        END
+      WHERE f.user_a = $1 OR f.user_b = $1
+      ORDER BY u.username ASC
+      `,
+      [req.user.id]
+    );
+
+    res.json({
+      ok: true,
+      items: rows.map((r) => ({
+        id: Number(r.id),
+        username: r.username
+      }))
+    });
+  } catch (err) {
+    console.error("FRIENDS LIST ERROR:", err);
+    res.status(500).json({ error: "Failed to load friends." });
+  }
+});
+
+app.get("/api/friends/requests", requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT fr.id, u.username AS from_username
+      FROM friend_requests fr
+      JOIN users u ON u.id = fr.from_user_id
+      WHERE fr.to_user_id = $1 AND fr.status = 'pending'
+      ORDER BY fr.created_at DESC
+      `,
+      [req.user.id]
+    );
+
+    res.json({
+      ok: true,
+      items: rows.map((r) => ({
+        id: Number(r.id),
+        fromUsername: r.from_username
+      }))
+    });
+  } catch (err) {
+    console.error("GET FRIEND REQUESTS ERROR:", err);
+    res.status(500).json({ error: "Failed to load friend requests." });
+  }
+});
+
+app.post("/api/friends/request", requireAuth, async (req, res) => {
+  try {
+    const username = String(req.body?.username || "").trim();
+    if (!username) {
+      return res.status(400).json({ error: "Missing username." });
+    }
+
+    const target = await getUserByUsername(username);
+    if (!target) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    if (Number(target.id) === Number(req.user.id)) {
+      return res.status(400).json({ error: "You cannot add yourself." });
+    }
+
+    const a = Math.min(req.user.id, target.id);
+    const b = Math.max(req.user.id, target.id);
+
+    const alreadyFriends = await pool.query(
+      `SELECT id FROM friends WHERE user_a = $1 AND user_b = $2`,
+      [a, b]
+    );
+
+    if (alreadyFriends.rows[0]) {
+      return res.status(400).json({ error: "Already friends." });
+    }
+
+    await pool.query(
+      `
+      INSERT INTO friend_requests (from_user_id, to_user_id, status)
+      VALUES ($1, $2, 'pending')
+      ON CONFLICT (from_user_id, to_user_id)
+      DO UPDATE SET status = 'pending'
+      `,
+      [req.user.id, target.id]
+    );
+
+    sendFriendNotificationToUser(target.id, {
+      type: "friend_request",
+      fromUsername: req.user.username
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("SEND FRIEND REQUEST ERROR:", err);
+    res.status(500).json({ error: "Failed to send friend request." });
+  }
+});
+
+app.post("/api/friends/accept", requireAuth, async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const requestId = Number(req.body?.requestId || 0);
+    if (!requestId) {
+      return res.status(400).json({ error: "Invalid request id." });
+    }
+
+    await client.query("BEGIN");
+
+    const reqRow = await client.query(
+      `
+      SELECT *
+      FROM friend_requests
+      WHERE id = $1 AND to_user_id = $2 AND status = 'pending'
+      FOR UPDATE
+      `,
+      [requestId, req.user.id]
+    );
+
+    const fr = reqRow.rows[0];
+    if (!fr) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Friend request not found." });
+    }
+
+    const a = Math.min(Number(fr.from_user_id), Number(fr.to_user_id));
+    const b = Math.max(Number(fr.from_user_id), Number(fr.to_user_id));
+
+    await client.query(
+      `
+      INSERT INTO friends (user_a, user_b)
+      VALUES ($1, $2)
+      ON CONFLICT (user_a, user_b) DO NOTHING
+      `,
+      [a, b]
+    );
+
+    await client.query(
+      `UPDATE friend_requests SET status = 'accepted' WHERE id = $1`,
+      [requestId]
+    );
+
+    await client.query("COMMIT");
+
+    sendFriendNotificationToUser(Number(fr.from_user_id), {
+      type: "friend_accept",
+      fromUsername: req.user.username
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("ACCEPT FRIEND REQUEST ERROR:", err);
+    res.status(500).json({ error: "Failed to accept friend request." });
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/api/friends/deny", requireAuth, async (req, res) => {
+  try {
+    const requestId = Number(req.body?.requestId || 0);
+    if (!requestId) {
+      return res.status(400).json({ error: "Invalid request id." });
+    }
+
+    await pool.query(
+      `
+      UPDATE friend_requests
+      SET status = 'denied'
+      WHERE id = $1 AND to_user_id = $2 AND status = 'pending'
+      `,
+      [requestId, req.user.id]
+    );
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("DENY FRIEND REQUEST ERROR:", err);
+    res.status(500).json({ error: "Failed to deny request." });
+  }
+});
+
+app.post("/api/friends/remove", requireAuth, async (req, res) => {
+  try {
+    const username = String(req.body?.username || "").trim();
+    if (!username) {
+      return res.status(400).json({ error: "Missing username." });
+    }
+
+    const target = await getUserByUsername(username);
+    if (!target) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const a = Math.min(req.user.id, target.id);
+    const b = Math.max(req.user.id, target.id);
+
+    await pool.query(
+      `DELETE FROM friends WHERE user_a = $1 AND user_b = $2`,
+      [a, b]
+    );
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("REMOVE FRIEND ERROR:", err);
+    res.status(500).json({ error: "Failed to remove friend." });
+  }
+});
+
 app.post("/api/game/enter", requireAuth, async (req, res) => {
   try {
     const freshUser = await getUserById(req.user.id);
@@ -700,9 +1004,8 @@ app.post("/api/game/enter", requireAuth, async (req, res) => {
     }
 
     const requestedStake = Number(req.body?.stake || 1);
-    const allowedStakes = [1, 5, 10, 20];
 
-    if (!allowedStakes.includes(requestedStake)) {
+    if (!ALLOWED_STAKES.includes(requestedStake)) {
       return res.status(400).json({ error: "Invalid amount selected." });
     }
 
@@ -1205,6 +1508,7 @@ async function completeExtraction(player) {
     players.delete(player.id);
     if (player.userId) {
       playerByUserId.delete(player.userId);
+      socketsByUserId.delete(player.userId);
     }
 
     if (socket.request?.session) {
@@ -1244,6 +1548,7 @@ function eliminateHuman(player, eaterName) {
 
   if (player.userId) {
     playerByUserId.delete(player.userId);
+    socketsByUserId.delete(player.userId);
   }
 
   const req = socket?.request;
@@ -1449,7 +1754,7 @@ io.on("connection", (socket) => {
 
       const stake = Number(req.session.gameEntryStake || 1);
 
-      if (![1, 5, 10, 20].includes(stake)) {
+      if (!ALLOWED_STAKES.includes(stake)) {
         socket.emit("joinError", { error: "Invalid selected amount." });
         return;
       }
@@ -1514,6 +1819,7 @@ io.on("connection", (socket) => {
 
         players.set(socket.id, player);
         playerByUserId.set(freshUser.id, socket.id);
+        socketsByUserId.set(freshUser.id, socket.id);
 
         socket.emit("chatHistory", chatMessages);
         socket.emit("joined", {
@@ -1561,6 +1867,7 @@ io.on("connection", (socket) => {
 
       if (player.userId) {
         playerByUserId.delete(player.userId);
+        socketsByUserId.delete(player.userId);
       }
 
       if (socket.request?.session) {
