@@ -6,8 +6,6 @@ const session = require("express-session");
 const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcryptjs");
 const { Pool } = require("pg");
-const EXTRACTION_HOLD_TICKS = 6 * TICK_RATE;
-const EXTRACTION_PAYOUT_RATE = 0.95;
 
 const app = express();
 app.set("trust proxy", 1);
@@ -1624,6 +1622,7 @@ start().catch((err) => {
   console.error("STARTUP ERROR:", err);
   process.exit(1);
 });
+
 
 
 
