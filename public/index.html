@@ -14,11 +14,6 @@
       <div class="massLabel">Mass</div>
       <div class="massValue" id="massValue">0</div>
     </div>
-
-    <div class="leaderboard">
-      <div class="leaderboardTitle">Leaderboard</div>
-      <div class="leaderboardEntries" id="leaderboardEntries"></div>
-    </div>
   </div>
 
   <div class="chatBox" id="chatBox">
@@ -35,30 +30,16 @@
   <div class="landingScreen" id="landingScreen">
     <div class="moneyBg" id="moneyBg"></div>
 
-    <div class="landingPanel" id="startPanel">
+    <div class="landingPanel">
       <h1>PIPO.IO</h1>
       <p>Grow bigger. Dominate the map.</p>
-      <button id="startMenuBtn" type="button">PLAY</button>
+      <button id="startMenuBtn">PLAY</button>
     </div>
 
     <div class="authPanel hidden" id="authPanel">
       <h2>Account</h2>
-
-      <input
-        id="authUsername"
-        type="text"
-        placeholder="Username"
-        maxlength="20"
-        autocomplete="username"
-      />
-
-      <input
-        id="authPassword"
-        type="password"
-        placeholder="Password"
-        maxlength="64"
-        autocomplete="current-password"
-      />
+      <input id="authUsername" type="text" placeholder="Username" maxlength="20" />
+      <input id="authPassword" type="password" placeholder="Password" maxlength="64" />
 
       <div class="authButtons">
         <button id="registerBtn" type="button">Register</button>
@@ -71,69 +52,103 @@
   </div>
 
   <div class="menu hidden" id="menu">
-    <div class="moneyBg" id="menuMoneyBg"></div>
+    <div class="ballsBg" id="menuBallsBg"></div>
 
-    <div class="panel gameMenuPanel">
-      <h1>PIPO.IO</h1>
-      <p>Choose your name and ball color, then enter the arena.</p>
-
-      <input
-        id="nameInput"
-        type="text"
-        maxlength="16"
-        placeholder="Nickname"
-        value="Player"
-        autocomplete="off"
-      />
-
-      <div class="colorRow">
-        <label for="colorInput">Ball color</label>
-        <input id="colorInput" type="color" value="#33c3ff" />
-      </div>
-
-      <div class="walletPanel" id="walletPanel">
-        <div class="walletTitle">Wallet</div>
-        <div class="walletAmount" id="walletValue">$0.00</div>
-        <div class="walletSubtext">1 EUR = 1 wallet credit</div>
-
-        <input
-          id="walletAmountInput"
-          type="number"
-          min="0.01"
-          step="0.01"
-          placeholder="Amount in €"
-          autocomplete="off"
-        />
-
-        <input
-          id="withdrawAddressInput"
-          type="text"
-          maxlength="80"
-          placeholder="Solana wallet address for withdrawals"
-          autocomplete="off"
-        />
-
-        <div class="walletActions">
-          <button id="addBalanceBtn" type="button" class="walletBtn">
-            Add Balance
-          </button>
-          <button id="withdrawBtn" type="button" class="walletBtn secondary">
-            Withdraw
-          </button>
+    <div class="menuShell">
+      <div class="sideColumn">
+        <div class="menuCard leaderboardCard">
+          <div class="cardHeader">
+            <span>🏆 Leaderboard</span>
+            <span class="liveBadge">Live</span>
+          </div>
+          <div class="leaderboardEntries" id="leaderboardEntries"></div>
         </div>
 
-        <div class="menuStatus" id="walletStatus"></div>
+        <div class="menuCard infoCard">
+          <div class="cardHeader">
+            <span>👥 Friends</span>
+          </div>
+          <div class="emptyCardText">No friends yet.</div>
+        </div>
       </div>
 
-      <div class="menuDivider"></div>
+      <div class="centerColumn">
+        <div class="menuCard mainPlayCard">
+          <h1>PIPO.IO</h1>
+          <p>Choose your name, color and amount to enter the arena.</p>
 
-      <button id="playBtn" type="button">Enter Game</button>
+          <input
+            id="nameInput"
+            type="text"
+            maxlength="16"
+            placeholder="Nickname"
+            value="Player"
+          />
 
-      <div class="smallInfo">
-        Move mouse to move · Space to split · W to eject mass · \ to chat
+          <div class="colorRow">
+            <label for="colorInput">Ball color</label>
+            <input id="colorInput" type="color" value="#33c3ff" />
+          </div>
+
+          <div class="stakeSection">
+            <div class="stakeTitle">Choose amount</div>
+            <div class="stakeButtons">
+              <button class="stakeBtn active" data-stake="1" type="button">$1</button>
+              <button class="stakeBtn" data-stake="5" type="button">$5</button>
+              <button class="stakeBtn" data-stake="10" type="button">$10</button>
+              <button class="stakeBtn" data-stake="20" type="button">$20</button>
+            </div>
+          </div>
+
+          <button id="playBtn" class="mainJoinBtn">JOIN GAME</button>
+
+          <div id="menuStatus" class="menuStatus"></div>
+
+          <div class="smallInfo">
+            Move mouse to move · Space to split · W to eject · Q hold to extract · \ to chat
+          </div>
+        </div>
       </div>
 
-      <div class="menuStatus" id="menuStatus"></div>
+      <div class="sideColumn">
+        <div class="menuCard walletCard" id="walletCard">
+          <div class="cardHeader">
+            <span>💼 Wallet</span>
+          </div>
+
+          <div class="walletBalanceBig" id="walletValue">$0.00</div>
+
+          <input
+            id="walletAmountInput"
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="Amount in €"
+          />
+
+          <input
+            id="withdrawAddressInput"
+            type="text"
+            maxlength="80"
+            placeholder="Solana wallet address"
+          />
+
+          <div class="walletButtons">
+            <button id="addBalanceBtn" type="button">Add Funds</button>
+            <button id="withdrawBtn" type="button" class="secondaryButton">Cash Out</button>
+          </div>
+
+          <div class="walletHint">1 EUR = 1 wallet credit</div>
+          <div class="walletStatus" id="walletStatus"></div>
+        </div>
+
+        <div class="menuCard infoCard">
+          <div class="cardHeader">
+            <span>🎨 Customize</span>
+          </div>
+          <div class="emptyCardText">Choose your ball color before joining.</div>
+        </div>
+      </div>
     </div>
   </div>
 
