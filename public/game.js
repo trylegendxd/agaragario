@@ -48,6 +48,7 @@ window.addEventListener("resize", () => {
 });
 
 const state = {
+  extracting: false,
   connected: false,
   worldSize: 12000,
   food: [],
@@ -160,6 +161,35 @@ async function api(path, body = null) {
   return data;
 }
 
+function drawExtractionIndicator() {
+  const me = getMyPlayer();
+  if (!me || !me.extracting) return;
+
+  const center = getMyCenter();
+  const s = worldToScreen(center.x, center.y);
+
+  const progress = Math.max(0, Math.min(1, (me.extractTicks || 0) / (6 * 45)));
+  const radius = 42;
+
+  ctx.beginPath();
+  ctx.arc(s.x, s.y, radius, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(0,0,0,0.16)";
+  ctx.lineWidth = 6;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(s.x, s.y, radius, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+  ctx.strokeStyle = "#39ff76";
+  ctx.lineWidth = 7;
+  ctx.stroke();
+
+  ctx.fillStyle = "#39ff76";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = "bold 14px Arial";
+  ctx.fillText(`Extracting ${Math.ceil((1 - progress) * 6)}s`, s.x, s.y - 58);
+}
+
 function setAuthStatus(text, isError = false) {
   if (!authStatus) return;
   authStatus.textContent = text || "";
@@ -236,6 +266,7 @@ function resetGameVisualState() {
   massValue.textContent = "0";
   leaderboardEntries.innerHTML = "";
   setChatOpen(false);
+  state.extracting = false;
 }
 
 function updateAuthUi(user) {
@@ -581,6 +612,7 @@ function render() {
   drawFood();
   drawViruses();
   drawPlayers();
+  drawExtractionIndicator();
   drawMinimap();
   updateHud();
 }
@@ -598,6 +630,8 @@ function cloneStateForSnapshot(serverState) {
       color: p.color,
       isBot: !!p.isBot,
       cashValue: Number(p.cashValue || 0),
+      extracting: !!p.extracting,
+      extractTicks: Number(p.extractTicks || 0),
       totalMass: p.totalMass,
       cells: (p.cells || []).map((c) => ({ ...c }))
     }))
@@ -677,6 +711,10 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
+  if (e.key === "q" || e.key === "Q") {
+  state.extracting = true;
+}
+
   if (chatOpen) return;
   if (!inMatch) return;
 
@@ -687,6 +725,12 @@ window.addEventListener("keydown", (e) => {
 
   if (e.key === "w" || e.key === "W") {
     state.ejectQueued = true;
+  }
+});
+
+window.addEventListener("keyup", (e) => {
+  if (e.key === "q" || e.key === "Q") {
+    state.extracting = false;
   }
 });
 
@@ -969,6 +1013,20 @@ socket.on("state", (serverState) => {
   }
 });
 
+socket.on("extracted", async (data) => {
+  inMatch = false;
+  resetGameVisualState();
+  showMenu();
+  setPlayButtonState(false);
+  setMenuStatus(data?.message || "You extracted from the match.");
+  await refreshWallet();
+});
+
+socket.on("extractFailed", (data) => {
+  state.extracting = false;
+  setMenuStatus(data?.error || "Extraction failed.", true);
+});
+
 setInterval(() => {
   if (!state.connected || !inMatch) return;
 
@@ -976,7 +1034,8 @@ setInterval(() => {
     mouseX: state.mouseX,
     mouseY: state.mouseY,
     split: state.splitQueued,
-    eject: state.ejectQueued
+    eject: state.ejectQueued,
+    extracting: state.extracting
   });
 
   state.splitQueued = false;
@@ -1008,4 +1067,5 @@ spawnMoneySigns(menuMoneyBg, 28);
 checkSession();
 loop();
 setPlayButtonState(false);
+
 
