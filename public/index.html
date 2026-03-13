@@ -14,6 +14,11 @@
       <div class="massLabel">Mass</div>
       <div class="massValue" id="massValue">0</div>
     </div>
+
+    <div class="leaderboard gameLeaderboard" id="gameLeaderboard">
+      <div class="leaderboardTitle">Leaderboard</div>
+      <div class="leaderboardEntries" id="gameLeaderboardEntries"></div>
+    </div>
   </div>
 
   <div class="chatBox" id="chatBox">
@@ -58,24 +63,50 @@
       <div class="sideColumn">
         <div class="menuCard leaderboardCard">
           <div class="cardHeader">
-            <span>🏆 Leaderboard</span>
-            <span class="liveBadge">Live</span>
+            <span>🏆 Richest Players</span>
+            <span class="liveBadge">Top 10</span>
           </div>
-          <div class="leaderboardEntries" id="leaderboardEntries"></div>
+          <div class="leaderboardEntries" id="menuLeaderboardEntries"></div>
         </div>
 
-        <div class="menuCard infoCard">
+        <div class="menuCard friendsCard">
           <div class="cardHeader">
             <span>👥 Friends</span>
+            <button id="toggleFriendSearchBtn" type="button" class="miniCardBtn">Add</button>
           </div>
-          <div class="emptyCardText">No friends yet.</div>
+
+          <div class="friendsSection">
+            <div class="friendsSubTitle">Your friends</div>
+            <div class="friendsList" id="friendsList">
+              <div class="emptyCardText">No friends yet.</div>
+            </div>
+          </div>
+
+          <div class="friendSearchPanel hidden" id="friendSearchPanel">
+            <input
+              id="friendSearchInput"
+              type="text"
+              placeholder="Search account name..."
+              maxlength="20"
+            />
+            <div class="friendSearchResults" id="friendSearchResults"></div>
+          </div>
+
+          <div class="friendsSection">
+            <div class="friendsSubTitle">Requests</div>
+            <div class="friendRequestsList" id="friendRequestsList">
+              <div class="emptyCardText">No pending requests.</div>
+            </div>
+          </div>
+
+          <div class="friendsStatus" id="friendsStatus"></div>
         </div>
       </div>
 
       <div class="centerColumn">
         <div class="menuCard mainPlayCard">
           <h1>PIPO.IO</h1>
-          <p>Choose your name, color and amount to enter the arena.</p>
+          <p>Choose your name and amount to enter the arena.</p>
 
           <input
             id="nameInput"
@@ -84,11 +115,6 @@
             placeholder="Nickname"
             value="Player"
           />
-
-          <div class="colorRow">
-            <label for="colorInput">Ball color</label>
-            <input id="colorInput" type="color" value="#33c3ff" />
-          </div>
 
           <div class="stakeSection">
             <div class="stakeTitle">Choose amount</div>
@@ -142,14 +168,27 @@
           <div class="walletStatus" id="walletStatus"></div>
         </div>
 
-        <div class="menuCard infoCard">
+        <div class="menuCard customizeCard">
           <div class="cardHeader">
             <span>🎨 Customize</span>
           </div>
-          <div class="emptyCardText">Choose your ball color before joining.</div>
+
+          <div class="customizeBody">
+            <div class="colorRow">
+              <label for="colorInput">Ball color</label>
+              <input id="colorInput" type="color" value="#33c3ff" />
+            </div>
+
+            <div class="colorPreviewWrap">
+              <div class="colorPreviewLabel">Preview</div>
+              <div class="colorPreviewBall" id="colorPreviewBall"></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
+
+    <div class="toastContainer" id="toastContainer"></div>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
