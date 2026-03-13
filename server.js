@@ -46,6 +46,14 @@ const GAME_ENTRY_COST = 1;
 const REGISTER_BONUS = 5;
 const BOT_FOOD_CAP = 200;
 
+/* new gameplay constants */
+const SPLIT_MERGE_DELAY_TICKS = 35 * TICK_RATE;
+const SPLIT_LAUNCH_SPEED = 34;
+const EJECT_LAUNCH_DISTANCE = 100;
+const EJECT_LAUNCH_SPEED = 26;
+const SELF_SEPARATION_FACTOR = 0.9;
+const MERGE_ATTRACTION_FACTOR = 0.018;
+
 const players = new Map();
 const playerByUserId = new Map();
 const food = [];
@@ -149,6 +157,8 @@ function createFood() {
     id: Math.random().toString(36).slice(2),
     x: rand(-WORLD_SIZE / 2, WORLD_SIZE / 2),
     y: rand(-WORLD_SIZE / 2, WORLD_SIZE / 2),
+    vx: 0,
+    vy: 0,
     r: 8,
     color: `hsl(${Math.floor(rand(0, 360))},85%,60%)`,
     mass: 1
@@ -753,14 +763,31 @@ function moveEntity(entity) {
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const d = Math.hypot(dx, dy) || 1;
-      const minD = (radiusFromMass(a.mass) + radiusFromMass(b.mass)) * 0.55;
 
-      if (d < minD) {
-        const push = (minD - d) * 0.08;
-        a.x -= (dx / d) * push;
-        a.y -= (dy / d) * push;
-        b.x += (dx / d) * push;
-        b.y += (dy / d) * push;
+      const ar = radiusFromMass(a.mass);
+      const br = radiusFromMass(b.mass);
+      const desiredSeparation = (ar + br) * SELF_SEPARATION_FACTOR;
+
+      if (d < desiredSeparation) {
+        const push = (desiredSeparation - d) * 0.12;
+        const nx = dx / d;
+        const ny = dy / d;
+
+        a.x -= nx * push;
+        a.y -= ny * push;
+        b.x += nx * push;
+        b.y += ny * push;
+      }
+
+      if (a.mergeTimer <= 0 && b.mergeTimer <= 0) {
+        const nx = dx / d;
+        const ny = dy / d;
+        const attract = Math.max(0, d - (ar + br) * 0.35) * MERGE_ATTRACTION_FACTOR;
+
+        a.vx += nx * attract;
+        a.vy += ny * attract;
+        b.vx -= nx * attract;
+        b.vy -= ny * attract;
       }
     }
   }
@@ -790,18 +817,22 @@ function splitEntity(entity) {
 
     const childMass = cell.mass / 2;
     cell.mass = childMass;
+
     const r = radiusFromMass(childMass);
+    const spawnDistance = r * 3.4;
 
     newCells.push({
-      x: cell.x + dirX * (r * 2.2),
-      y: cell.y + dirY * (r * 2.2),
+      x: cell.x + dirX * spawnDistance,
+      y: cell.y + dirY * spawnDistance,
       mass: childMass,
-      vx: dirX * 22,
-      vy: dirY * 22,
-      mergeTimer: 220
+      vx: dirX * SPLIT_LAUNCH_SPEED,
+      vy: dirY * SPLIT_LAUNCH_SPEED,
+      mergeTimer: SPLIT_MERGE_DELAY_TICKS
     });
 
-    cell.mergeTimer = 220;
+    cell.vx -= dirX * 4;
+    cell.vy -= dirY * 4;
+    cell.mergeTimer = SPLIT_MERGE_DELAY_TICKS;
   }
 
   entity.cells.push(...newCells);
@@ -819,22 +850,45 @@ function ejectMass(entity) {
     if (cell.mass <= 20) continue;
     cell.mass -= 1;
 
+    const px = clamp(
+      cell.x + dirX * (radiusFromMass(cell.mass) + EJECT_LAUNCH_DISTANCE),
+      -WORLD_SIZE / 2,
+      WORLD_SIZE / 2
+    );
+    const py = clamp(
+      cell.y + dirY * (radiusFromMass(cell.mass) + EJECT_LAUNCH_DISTANCE),
+      -WORLD_SIZE / 2,
+      WORLD_SIZE / 2
+    );
+
     food.push({
       id: Math.random().toString(36).slice(2),
-      x: clamp(
-        cell.x + dirX * (radiusFromMass(cell.mass) + 20),
-        -WORLD_SIZE / 2,
-        WORLD_SIZE / 2
-      ),
-      y: clamp(
-        cell.y + dirY * (radiusFromMass(cell.mass) + 20),
-        -WORLD_SIZE / 2,
-        WORLD_SIZE / 2
-      ),
+      x: px,
+      y: py,
+      vx: dirX * EJECT_LAUNCH_SPEED,
+      vy: dirY * EJECT_LAUNCH_SPEED,
       r: 8,
       color: entity.color,
       mass: 1
     });
+  }
+}
+
+function moveEjectedFood() {
+  for (const f of food) {
+    if (typeof f.vx !== "number" || typeof f.vy !== "number") continue;
+
+    f.x += f.vx;
+    f.y += f.vy;
+
+    f.vx *= 0.92;
+    f.vy *= 0.92;
+
+    f.x = clamp(f.x, -WORLD_SIZE / 2, WORLD_SIZE / 2);
+    f.y = clamp(f.y, -WORLD_SIZE / 2, WORLD_SIZE / 2);
+
+    if (Math.abs(f.vx) < 0.05) f.vx = 0;
+    if (Math.abs(f.vy) < 0.05) f.vy = 0;
   }
 }
 
@@ -897,17 +951,17 @@ function splitByVirus(entity, cellIndex, virusIndex) {
 
   const partMass = cell.mass / piecesWanted;
   cell.mass = partMass;
-  cell.mergeTimer = 300;
+  cell.mergeTimer = SPLIT_MERGE_DELAY_TICKS;
 
   for (let i = 1; i < piecesWanted; i++) {
     const ang = (Math.PI * 2 * i) / piecesWanted;
     entity.cells.push({
-      x: cell.x + Math.cos(ang) * 20,
-      y: cell.y + Math.sin(ang) * 20,
+      x: cell.x + Math.cos(ang) * 35,
+      y: cell.y + Math.sin(ang) * 35,
       mass: partMass,
-      vx: Math.cos(ang) * 18,
-      vy: Math.sin(ang) * 18,
-      mergeTimer: 300
+      vx: Math.cos(ang) * 22,
+      vy: Math.sin(ang) * 22,
+      mergeTimer: SPLIT_MERGE_DELAY_TICKS
     });
   }
 
@@ -943,12 +997,12 @@ function handleSelfMerge(entity) {
       const b = entity.cells[j];
       const d = distance(a.x, a.y, b.x, b.y);
 
-      if (
-        a.mergeTimer <= 0 &&
-        b.mergeTimer <= 0 &&
-        d < Math.max(radiusFromMass(a.mass), radiusFromMass(b.mass)) * 0.6
-      ) {
+      if (a.mergeTimer > 0 || b.mergeTimer > 0) continue;
+
+      if (d < Math.max(radiusFromMass(a.mass), radiusFromMass(b.mass)) * 0.35) {
         a.mass += b.mass;
+        a.vx = (a.vx + b.vx) * 0.5;
+        a.vy = (a.vy + b.vy) * 0.5;
         entity.cells.splice(j, 1);
         j--;
       }
@@ -1347,6 +1401,8 @@ async function tick() {
   for (const bot of bots) {
     botThink(bot);
   }
+
+  moveEjectedFood();
 
   for (const entity of [...players.values(), ...bots]) {
     if (!entity.cells.length) continue;
