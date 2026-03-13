@@ -43,7 +43,6 @@ const MAX_CELLS = 16;
 const SNAPSHOT_PADDING = 650;
 const MAX_CHAT_MESSAGES = 40;
 const START_MASS = 30;
-const GAME_ENTRY_COST = 1;
 const REGISTER_BONUS = 5;
 const BOT_FOOD_CAP = 200;
 
@@ -128,10 +127,6 @@ function rand(min, max) {
   return Math.random() * (max - min) + min;
 }
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
 function distance(ax, ay, bx, by) {
   return Math.hypot(ax - bx, ay - by);
 }
@@ -145,6 +140,30 @@ function distanceSq(ax, ay, bx, by) {
 function randomColor() {
   const hue = Math.floor(rand(0, 360));
   return `hsl(${hue}, 80%, 58%)`;
+}
+
+function randomPointInCircle(maxRadius) {
+  const angle = Math.random() * Math.PI * 2;
+  const radius = Math.sqrt(Math.random()) * maxRadius;
+  return {
+    x: Math.cos(angle) * radius,
+    y: Math.sin(angle) * radius
+  };
+}
+
+function clampToWorldCircle(x, y, radius = 0) {
+  const maxDist = Math.max(0, WORLD_RADIUS - radius);
+  const dist = Math.hypot(x, y) || 1;
+
+  if (dist <= maxDist) {
+    return { x, y };
+  }
+
+  const scale = maxDist / dist;
+  return {
+    x: x * scale,
+    y: y * scale
+  };
 }
 
 function randomSpawnCell() {
@@ -183,30 +202,6 @@ function createVirus() {
   };
 }
 
-function randomPointInCircle(maxRadius) {
-  const angle = Math.random() * Math.PI * 2;
-  const radius = Math.sqrt(Math.random()) * maxRadius;
-  return {
-    x: Math.cos(angle) * radius,
-    y: Math.sin(angle) * radius
-  };
-}
-
-function clampToWorldCircle(x, y, radius = 0) {
-  const maxDist = Math.max(0, WORLD_RADIUS - radius);
-  const dist = Math.hypot(x, y) || 1;
-
-  if (dist <= maxDist) {
-    return { x, y };
-  }
-
-  const scale = maxDist / dist;
-  return {
-    x: x * scale,
-    y: y * scale
-  };
-}
-
 function totalMass(entity) {
   return entity.cells.reduce((sum, cell) => sum + cell.mass, 0);
 }
@@ -234,22 +229,23 @@ function createHumanPlayer(socketId, user, payload) {
     "Player";
 
   return {
-  kind: "human",
-  id: socketId,
-  userId: Number(user.id),
-  username: user.username,
-  name: safeName,
-  color: requestedColor || randomColor(),
-  mouse: { x: 0, y: 0 },
-  wantsSplit: false,
-  wantsEject: false,
-  wantsExtract: false,
-  extracting: false,
-  extractTicks: 0,
-  cells: [randomSpawnCell()],
-  alive: true,
-  joinedAt: Date.now()
- };
+    kind: "human",
+    id: socketId,
+    userId: Number(user.id),
+    username: user.username,
+    name: safeName,
+    color: requestedColor || randomColor(),
+    mouse: { x: 0, y: 0 },
+    wantsSplit: false,
+    wantsEject: false,
+    wantsExtract: false,
+    extracting: false,
+    extractTicks: 0,
+    cashValue: 0,
+    cells: [randomSpawnCell()],
+    alive: true,
+    joinedAt: Date.now()
+  };
 }
 
 function createBot(index) {
@@ -261,6 +257,9 @@ function createBot(index) {
     mouse: { x: 0, y: 0 },
     wantsSplit: false,
     wantsEject: false,
+    wantsExtract: false,
+    extracting: false,
+    extractTicks: 0,
     cashValue: 0,
     cells: [randomSpawnCell()],
     alive: true,
@@ -311,53 +310,6 @@ async function getUserByUsername(username) {
     password_hash: rows[0].password_hash,
     credits: Number(rows[0].credits || 0)
   };
-}
-
-async function completeExtraction(player) {
-  const socket = io.sockets.sockets.get(player.id);
-  if (!player || !socket) return;
-
-  const totalValue = Number(player.cashValue || 0);
-  const payout = Number((totalValue * EXTRACTION_PAYOUT_RATE).toFixed(2));
-
-  try {
-    if (payout > 0) {
-      const wallet = await addCreditsTx(
-        player.userId,
-        payout,
-        "extraction_payout",
-        `Extracted from match (${Math.round(EXTRACTION_PAYOUT_RATE * 100)}% payout)`
-      );
-
-      if (socket.request?.session?.user) {
-        socket.request.session.user.credits = wallet;
-      }
-    }
-
-    players.delete(player.id);
-    if (player.userId) {
-      playerByUserId.delete(player.userId);
-    }
-
-    if (socket.request?.session) {
-      socket.request.session.gameEntryReady = false;
-      socket.request.session.save(() => {});
-    }
-
-    socket.emit("extracted", {
-      payout,
-      kept: totalValue,
-      message: `You extracted ${payout.toFixed(2)} back to your wallet.`
-    });
-
-    addChatMessage("SERVER", `${player.name} extracted from the match`);
-  } catch (err) {
-    console.error("EXTRACTION ERROR:", err);
-    socket.emit("extractFailed", { error: "Failed to extract." });
-    player.extracting = false;
-    player.extractTicks = 0;
-    player.wantsExtract = false;
-  }
 }
 
 async function getUserById(id) {
@@ -561,6 +513,7 @@ app.post("/api/register", async (req, res) => {
       credits: Number(user.credits || 0)
     };
     req.session.gameEntryReady = false;
+    req.session.gameEntryStake = null;
 
     req.session.save((saveErr) => {
       if (saveErr) {
@@ -601,6 +554,7 @@ app.post("/api/login", async (req, res) => {
       credits: Number(user.credits || 0)
     };
     req.session.gameEntryReady = false;
+    req.session.gameEntryStake = null;
 
     req.session.save((saveErr) => {
       if (saveErr) {
@@ -745,6 +699,13 @@ app.post("/api/game/enter", requireAuth, async (req, res) => {
       return res.status(404).json({ error: "User not found." });
     }
 
+    const requestedStake = Number(req.body?.stake || 1);
+    const allowedStakes = [1, 5, 10, 20];
+
+    if (!allowedStakes.includes(requestedStake)) {
+      return res.status(400).json({ error: "Invalid amount selected." });
+    }
+
     const existingSocketId = playerByUserId.get(req.user.id);
     if (existingSocketId && players.has(existingSocketId)) {
       return res.json({
@@ -754,13 +715,15 @@ app.post("/api/game/enter", requireAuth, async (req, res) => {
       });
     }
 
-    if (Number(freshUser.credits || 0) < GAME_ENTRY_COST) {
+    if (Number(freshUser.credits || 0) < requestedStake) {
       return res.status(400).json({
-        error: "You need at least 1 credit to play."
+        error: `You need at least $${requestedStake.toFixed(2)} to play with that amount.`
       });
     }
 
     req.session.gameEntryReady = true;
+    req.session.gameEntryStake = requestedStake;
+
     req.session.save((err) => {
       if (err) {
         console.error("SESSION SAVE ERROR:", err);
@@ -770,7 +733,7 @@ app.post("/api/game/enter", requireAuth, async (req, res) => {
       res.json({
         ok: true,
         wallet: Number(freshUser.credits || 0),
-        cost: GAME_ENTRY_COST
+        cost: requestedStake
       });
     });
   } catch (err) {
@@ -788,12 +751,16 @@ app.get("/debug/players", (req, res) => {
       userId: p.userId,
       name: p.name,
       totalMass: Math.round(totalMass(p)),
+      cashValue: Number(p.cashValue || 0),
+      extracting: !!p.extracting,
+      extractTicks: Number(p.extractTicks || 0),
       cells: p.cells.length
     })),
     bots: bots.map((b) => ({
       id: b.id,
       name: b.name,
       totalMass: Math.round(totalMass(b)),
+      cashValue: Number(b.cashValue || 0),
       cells: b.cells.length
     })),
     food: food.length,
@@ -822,24 +789,25 @@ function respawnMissingBots() {
 
 function moveEntity(entity) {
   if (entity.extracting) {
-  for (const cell of entity.cells) {
-    cell.vx *= 0.6;
-    cell.vy *= 0.6;
-    cell.x += cell.vx;
-    cell.y += cell.vy;
+    for (const cell of entity.cells) {
+      cell.vx *= 0.6;
+      cell.vy *= 0.6;
+      cell.x += cell.vx;
+      cell.y += cell.vy;
 
-    if (cell.mergeTimer > 0) cell.mergeTimer--;
+      if (cell.mergeTimer > 0) cell.mergeTimer--;
+    }
+
+    for (const cell of entity.cells) {
+      const r = radiusFromMass(cell.mass);
+      const clamped = clampToWorldCircle(cell.x, cell.y, r);
+      cell.x = clamped.x;
+      cell.y = clamped.y;
+    }
+
+    return;
   }
 
-  for (const cell of entity.cells) {
-    const r = radiusFromMass(cell.mass);
-    const bound = WORLD_SIZE / 2 - r;
-    cell.x = clamp(cell.x, -bound, bound);
-    cell.y = clamp(cell.y, -bound, bound);
-  }
-
-  return;
- }
   for (const cell of entity.cells) {
     const speed = 2.9 / Math.pow(cell.mass, 0.16);
     const len = Math.hypot(entity.mouse.x, entity.mouse.y) || 1;
@@ -911,7 +879,7 @@ function moveEntity(entity) {
     }
   }
 
-    for (const cell of entity.cells) {
+  for (const cell of entity.cells) {
     const r = radiusFromMass(cell.mass);
     const clamped = clampToWorldCircle(cell.x, cell.y, r);
     cell.x = clamped.x;
@@ -937,7 +905,7 @@ function updateExtraction(entity) {
 }
 
 function splitEntity(entity) {
-  if (!entity.wantsSplit) return;
+  if (!entity.wantsSplit || entity.extracting) return;
   entity.wantsSplit = false;
 
   if (entity.cells.length >= MAX_CELLS) return;
@@ -975,7 +943,7 @@ function splitEntity(entity) {
 }
 
 function ejectMass(entity) {
-  if (!entity.wantsEject) return;
+  if (!entity.wantsEject || entity.extracting) return;
   entity.wantsEject = false;
 
   const len = Math.hypot(entity.mouse.x, entity.mouse.y) || 1;
@@ -987,21 +955,14 @@ function ejectMass(entity) {
 
     cell.mass -= EJECT_ORB_MASS;
 
-    const px = clamp(
-      cell.x + dirX * (radiusFromMass(cell.mass) + EJECT_LAUNCH_DISTANCE),
-      -WORLD_SIZE / 2,
-      WORLD_SIZE / 2
-    );
-    const py = clamp(
-      cell.y + dirY * (radiusFromMass(cell.mass) + EJECT_LAUNCH_DISTANCE),
-      -WORLD_SIZE / 2,
-      WORLD_SIZE / 2
-    );
+    const rawX = cell.x + dirX * (radiusFromMass(cell.mass) + EJECT_LAUNCH_DISTANCE);
+    const rawY = cell.y + dirY * (radiusFromMass(cell.mass) + EJECT_LAUNCH_DISTANCE);
+    const clamped = clampToWorldCircle(rawX, rawY, EJECT_ORB_RADIUS);
 
     food.push({
       id: Math.random().toString(36).slice(2),
-      x: px,
-      y: py,
+      x: clamped.x,
+      y: clamped.y,
       vx: dirX * EJECT_LAUNCH_SPEED,
       vy: dirY * EJECT_LAUNCH_SPEED,
       r: EJECT_ORB_RADIUS,
@@ -1216,8 +1177,56 @@ function botThink(bot) {
     }
   }
 
-  bot.mouse.x = clamp(moveX, -1400, 1400);
-  bot.mouse.y = clamp(moveY, -1400, 1400);
+  bot.mouse.x = Math.max(-1400, Math.min(1400, moveX));
+  bot.mouse.y = Math.max(-1400, Math.min(1400, moveY));
+}
+
+async function completeExtraction(player) {
+  const socket = io.sockets.sockets.get(player.id);
+  if (!player || !socket) return;
+
+  const totalValue = Number(player.cashValue || 0);
+  const payout = Number((totalValue * EXTRACTION_PAYOUT_RATE).toFixed(2));
+
+  try {
+    if (payout > 0) {
+      const wallet = await addCreditsTx(
+        player.userId,
+        payout,
+        "extraction_payout",
+        `Extracted from match (${Math.round(EXTRACTION_PAYOUT_RATE * 100)}% payout)`
+      );
+
+      if (socket.request?.session?.user) {
+        socket.request.session.user.credits = wallet;
+      }
+    }
+
+    players.delete(player.id);
+    if (player.userId) {
+      playerByUserId.delete(player.userId);
+    }
+
+    if (socket.request?.session) {
+      socket.request.session.gameEntryReady = false;
+      socket.request.session.gameEntryStake = null;
+      socket.request.session.save(() => {});
+    }
+
+    socket.emit("extracted", {
+      payout,
+      kept: totalValue,
+      message: `You extracted ${payout.toFixed(2)} back to your wallet.`
+    });
+
+    addChatMessage("SERVER", `${player.name} extracted from the match`);
+  } catch (err) {
+    console.error("EXTRACTION ERROR:", err);
+    socket.emit("extractFailed", { error: "Failed to extract." });
+    player.extracting = false;
+    player.extractTicks = 0;
+    player.wantsExtract = false;
+  }
 }
 
 function eliminateHuman(player, eaterName) {
@@ -1240,6 +1249,7 @@ function eliminateHuman(player, eaterName) {
   const req = socket?.request;
   if (req?.session) {
     req.session.gameEntryReady = false;
+    req.session.gameEntryStake = null;
     req.session.save(() => {});
   }
 }
@@ -1276,7 +1286,7 @@ function handleEntityVsEntity() {
           const br = radiusFromMass(bc.mass);
           const d = distance(ac.x, ac.y, bc.x, bc.y);
 
-                   if (ac.mass > bc.mass * 1.12 && d < ar - br * 0.3) {
+          if (ac.mass > bc.mass * 1.12 && d < ar - br * 0.3) {
             ac.mass += bc.mass;
             b.cells.splice(bi, 1);
 
@@ -1370,7 +1380,7 @@ async function buildSnapshotFor(targetPlayer) {
       continue;
     }
 
-        visiblePlayers.push({
+    visiblePlayers.push({
       id: entity.id,
       name: entity.name,
       color: entity.color,
@@ -1437,16 +1447,23 @@ io.on("connection", (socket) => {
         return;
       }
 
-      if (Number(freshUser.credits || 0) < GAME_ENTRY_COST) {
+      const stake = Number(req.session.gameEntryStake || 1);
+
+      if (![1, 5, 10, 20].includes(stake)) {
+        socket.emit("joinError", { error: "Invalid selected amount." });
+        return;
+      }
+
+      if (Number(freshUser.credits || 0) < stake) {
         socket.emit("joinError", { error: "Not enough balance to play." });
         return;
       }
 
       const wallet = await spendCreditsTx(
         freshUser.id,
-        GAME_ENTRY_COST,
+        stake,
         "game_entry",
-        "Entered a match"
+        `Entered a match with $${stake.toFixed(2)}`
       );
 
       req.session.user = {
@@ -1455,6 +1472,7 @@ io.on("connection", (socket) => {
         credits: wallet
       };
       req.session.gameEntryReady = false;
+      req.session.gameEntryStake = null;
 
       req.session.save(async (saveErr) => {
         if (saveErr) {
@@ -1463,7 +1481,7 @@ io.on("connection", (socket) => {
           try {
             const refundedWallet = await addCreditsTx(
               freshUser.id,
-              GAME_ENTRY_COST,
+              stake,
               "game_entry_refund",
               "Refund after failed join save"
             );
@@ -1491,6 +1509,8 @@ io.on("connection", (socket) => {
           },
           payload
         );
+
+        player.cashValue = stake;
 
         players.set(socket.id, player);
         playerByUserId.set(freshUser.id, socket.id);
@@ -1545,6 +1565,7 @@ io.on("connection", (socket) => {
 
       if (socket.request?.session) {
         socket.request.session.gameEntryReady = false;
+        socket.request.session.gameEntryStake = null;
         socket.request.session.save(() => {});
       }
     }
@@ -1563,26 +1584,26 @@ async function tick() {
   moveEjectedFood();
 
   for (const entity of [...players.values(), ...bots]) {
-  if (!entity.cells.length) continue;
+    if (!entity.cells.length) continue;
 
-  updateExtraction(entity);
-  moveEntity(entity);
-  splitEntity(entity);
-  ejectMass(entity);
-  handleFoodEating(entity);
-  handleVirusCollisions(entity);
-  handleSelfMerge(entity);
-}
-
-const finishedExtractions = [...players.values()].filter(
-  (p) => p.extracting && p.extractTicks >= EXTRACTION_HOLD_TICKS
-);
-
-for (const player of finishedExtractions) {
-  await completeExtraction(player);
-}
+    updateExtraction(entity);
+    moveEntity(entity);
+    splitEntity(entity);
+    ejectMass(entity);
+    handleFoodEating(entity);
+    handleVirusCollisions(entity);
+    handleSelfMerge(entity);
+  }
 
   handleEntityVsEntity();
+
+  const finishedExtractions = [...players.values()].filter(
+    (p) => p.extracting && p.extractTicks >= EXTRACTION_HOLD_TICKS
+  );
+
+  for (const player of finishedExtractions) {
+    await completeExtraction(player);
+  }
 
   while (food.length < FOOD_COUNT) food.push(createFood());
   while (viruses.length < VIRUS_COUNT) viruses.push(createVirus());
@@ -1622,8 +1643,3 @@ start().catch((err) => {
   console.error("STARTUP ERROR:", err);
   process.exit(1);
 });
-
-
-
-
-
