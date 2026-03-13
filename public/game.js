@@ -51,6 +51,21 @@ const friendSearchResults = document.getElementById("friendSearchResults");
 const friendsList = document.getElementById("friendsList");
 const friendRequestsList = document.getElementById("friendRequestsList");
 const friendsStatus = document.getElementById("friendsStatus");
+
+const privateChatCard = document.getElementById("privateChatCard");
+const privateChatTitle = document.getElementById("privateChatTitle");
+const privateChatMessages = document.getElementById("privateChatMessages");
+const privateChatInput = document.getElementById("privateChatInput");
+const sendPrivateChatBtn = document.getElementById("sendPrivateChatBtn");
+const closePrivateChatBtn = document.getElementById("closePrivateChatBtn");
+
+const menuMusic = document.getElementById("menuMusic");
+const musicSongName = document.getElementById("musicSongName");
+const musicPrevBtn = document.getElementById("musicPrevBtn");
+const musicPlayPauseBtn = document.getElementById("musicPlayPauseBtn");
+const musicNextBtn = document.getElementById("musicNextBtn");
+const musicVolumeRange = document.getElementById("musicVolumeRange");
+
 const toastContainer = document.getElementById("toastContainer");
 
 let W = (canvas.width = window.innerWidth);
@@ -83,7 +98,14 @@ const state = {
   wallet: 0,
   menuWalletLeaderboard: [],
   friends: [],
-  friendRequests: []
+  friendRequests: [],
+  privateChats: {},
+  activePrivateChat: null,
+  musicPlaylist: [],
+  currentTrackIndex: 0,
+  musicMuted: false,
+  musicVolume: 0.4,
+  musicReady: false
 };
 
 const snapshots = [];
@@ -243,12 +265,14 @@ function showMenu() {
   landingScreen?.classList.add("hidden");
   authPanel?.classList.add("hidden");
   menu?.classList.remove("hidden");
+  tryStartMenuMusic();
 }
 
 function hideMenusForGame() {
   landingScreen?.classList.add("hidden");
   authPanel?.classList.add("hidden");
   menu?.classList.add("hidden");
+  pauseMenuMusic();
 }
 
 function updateWalletUi(wallet) {
@@ -307,7 +331,9 @@ function updateAuthUi(user) {
     setMenuStatus("");
     setWalletStatus("");
     setFriendsStatus("");
+    closePrivateChat();
     showLandingOnly();
+    pauseMenuMusic();
   }
 }
 
@@ -384,12 +410,20 @@ function renderFriendsList() {
         <div class="friendRow">
           <div class="friendName">${escapeHtml(friend.username)}</div>
           <div class="friendActions">
+            <button class="friendBtnChat" data-open-chat="${escapeHtml(friend.username)}" type="button">Chat</button>
             <button class="friendBtnRemove" data-remove-friend="${escapeHtml(friend.username)}" type="button">Remove</button>
           </div>
         </div>
       `
     )
     .join("");
+
+  friendsList.querySelectorAll("[data-open-chat]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const username = btn.getAttribute("data-open-chat");
+      await openPrivateChat(username);
+    });
+  });
 
   friendsList.querySelectorAll("[data-remove-friend]").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -518,7 +552,79 @@ async function removeFriend(username) {
   }
 
   setFriendsStatus(`${username} removed from friends.`);
+  if (state.activePrivateChat === username) {
+    closePrivateChat();
+  }
   await refreshFriendsList();
+}
+
+function renderPrivateChat() {
+  if (!privateChatCard || !privateChatMessages) return;
+
+  const friend = state.activePrivateChat;
+  if (!friend) {
+    privateChatCard.classList.add("hidden");
+    return;
+  }
+
+  privateChatCard.classList.remove("hidden");
+  privateChatTitle.textContent = `Chat with ${friend}`;
+
+  const items = state.privateChats[friend] || [];
+  privateChatMessages.innerHTML = items
+    .map((msg) => {
+      const mine = msg.fromUsername === currentUser?.username;
+      return `
+        <div class="privateMsg ${mine ? "me" : "them"}">
+          ${escapeHtml(msg.message)}
+        </div>
+      `;
+    })
+    .join("");
+
+  privateChatMessages.scrollTop = privateChatMessages.scrollHeight;
+}
+
+async function openPrivateChat(username) {
+  const data = await api(`/api/private-messages/${encodeURIComponent(username)}`, null, "GET");
+  if (data.error) {
+    setFriendsStatus(data.error, true);
+    return;
+  }
+
+  state.activePrivateChat = username;
+  state.privateChats[username] = Array.isArray(data.items) ? data.items : [];
+  renderPrivateChat();
+}
+
+function closePrivateChat() {
+  state.activePrivateChat = null;
+  renderPrivateChat();
+}
+
+async function sendPrivateMessage() {
+  const toUsername = state.activePrivateChat;
+  const message = String(privateChatInput?.value || "").trim();
+
+  if (!toUsername || !message) return;
+
+  const data = await api("/api/private-messages/send", {
+    toUsername,
+    message
+  });
+
+  if (data.error) {
+    setFriendsStatus(data.error, true);
+    return;
+  }
+
+  if (!state.privateChats[toUsername]) {
+    state.privateChats[toUsername] = [];
+  }
+
+  state.privateChats[toUsername].push(data.item);
+  privateChatInput.value = "";
+  renderPrivateChat();
 }
 
 async function refreshMenuData() {
@@ -529,6 +635,110 @@ async function refreshMenuData() {
     refreshFriendRequests(),
     refreshWallet()
   ]);
+}
+
+async function loadMusicPlaylist() {
+  const data = await api("/api/music/playlist", null, "GET");
+  if (data.error) return;
+
+  state.musicPlaylist = Array.isArray(data.items) ? data.items : [];
+  state.musicReady = state.musicPlaylist.length > 0;
+
+  const savedIndex = Number(localStorage.getItem("pipo_music_index") || 0);
+  if (state.musicPlaylist.length > 0) {
+    state.currentTrackIndex = Math.max(0, Math.min(savedIndex, state.musicPlaylist.length - 1));
+    setCurrentTrack(state.currentTrackIndex, false);
+  } else {
+    if (musicSongName) musicSongName.textContent = "No song loaded";
+    if (musicPlayPauseBtn) musicPlayPauseBtn.textContent = "▶";
+  }
+}
+
+function loadMusicSettings() {
+  const savedMuted = localStorage.getItem("pipo_music_muted");
+  const savedVolume = localStorage.getItem("pipo_music_volume");
+
+  state.musicMuted = savedMuted === "true";
+  state.musicVolume = savedVolume ? Number(savedVolume) : 0.4;
+
+  if (musicVolumeRange) {
+    musicVolumeRange.value = String(state.musicVolume);
+  }
+
+  applyMusicSettings();
+}
+
+function applyMusicSettings() {
+  if (menuMusic) {
+    menuMusic.volume = state.musicMuted ? 0 : state.musicVolume;
+  }
+
+  localStorage.setItem("pipo_music_muted", String(state.musicMuted));
+  localStorage.setItem("pipo_music_volume", String(state.musicVolume));
+
+  updatePlayPauseButton();
+}
+
+function updatePlayPauseButton() {
+  if (!musicPlayPauseBtn || !menuMusic) return;
+
+  const isPlaying = !menuMusic.paused && !menuMusic.ended;
+  musicPlayPauseBtn.textContent = isPlaying ? "⏸" : "▶";
+}
+
+function setCurrentTrack(index, autoplay = false) {
+  if (!menuMusic || !state.musicPlaylist.length) return;
+
+  state.currentTrackIndex = (index + state.musicPlaylist.length) % state.musicPlaylist.length;
+  const track = state.musicPlaylist[state.currentTrackIndex];
+
+  menuMusic.src = track.url;
+  if (musicSongName) musicSongName.textContent = track.title || track.filename || "Unknown song";
+  localStorage.setItem("pipo_music_index", String(state.currentTrackIndex));
+
+  if (autoplay) {
+    tryStartMenuMusic();
+  } else {
+    updatePlayPauseButton();
+  }
+}
+
+async function tryStartMenuMusic() {
+  if (!menuMusic || !state.musicReady || !state.musicPlaylist.length) return;
+  if (inMatch) return;
+
+  try {
+    await menuMusic.play();
+    updatePlayPauseButton();
+  } catch {
+    updatePlayPauseButton();
+  }
+}
+
+function pauseMenuMusic() {
+  if (!menuMusic) return;
+  menuMusic.pause();
+  updatePlayPauseButton();
+}
+
+function toggleMusicPlayback() {
+  if (!menuMusic || !state.musicReady || !state.musicPlaylist.length) return;
+
+  if (menuMusic.paused) {
+    tryStartMenuMusic();
+  } else {
+    pauseMenuMusic();
+  }
+}
+
+function playNextTrack() {
+  if (!state.musicPlaylist.length) return;
+  setCurrentTrack(state.currentTrackIndex + 1, !inMatch);
+}
+
+function playPrevTrack() {
+  if (!state.musicPlaylist.length) return;
+  setCurrentTrack(state.currentTrackIndex - 1, !inMatch);
 }
 
 async function checkSession() {
@@ -1154,8 +1364,9 @@ nameInput?.addEventListener("keydown", (e) => {
   }
 });
 
-startMenuBtn?.addEventListener("click", () => {
+startMenuBtn?.addEventListener("click", async () => {
   showLandingWithAuth();
+  await tryStartMenuMusic();
 });
 
 stakeButtons.forEach((btn) => {
@@ -1181,6 +1392,36 @@ friendSearchInput?.addEventListener("input", () => {
     searchFriends(friendSearchInput.value);
   }, 250);
 });
+
+sendPrivateChatBtn?.addEventListener("click", sendPrivateMessage);
+
+privateChatInput?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    sendPrivateMessage();
+  }
+});
+
+closePrivateChatBtn?.addEventListener("click", closePrivateChat);
+
+musicPlayPauseBtn?.addEventListener("click", toggleMusicPlayback);
+musicNextBtn?.addEventListener("click", playNextTrack);
+musicPrevBtn?.addEventListener("click", playPrevTrack);
+
+musicVolumeRange?.addEventListener("input", () => {
+  state.musicMuted = false;
+  state.musicVolume = Number(musicVolumeRange.value || 0.4);
+  applyMusicSettings();
+  if (menuMusic && menuMusic.paused && !inMatch) {
+    updatePlayPauseButton();
+  }
+});
+
+menuMusic?.addEventListener("ended", () => {
+  playNextTrack();
+});
+
+menuMusic?.addEventListener("play", updatePlayPauseButton);
+menuMusic?.addEventListener("pause", updatePlayPauseButton);
 
 if (chatInput) {
   chatInput.addEventListener("keydown", (e) => {
@@ -1364,6 +1605,23 @@ socket.on("friendNotification", async (payload) => {
   }
 });
 
+socket.on("privateMessage", (msg) => {
+  const otherName =
+    msg.fromUsername === currentUser?.username ? msg.toUsername : msg.fromUsername;
+
+  if (!state.privateChats[otherName]) {
+    state.privateChats[otherName] = [];
+  }
+
+  state.privateChats[otherName].push(msg);
+
+  if (state.activePrivateChat === otherName) {
+    renderPrivateChat();
+  } else {
+    showToast(`New message from ${msg.fromUsername}`);
+  }
+});
+
 setInterval(() => {
   if (!state.connected || !inMatch) return;
 
@@ -1402,6 +1660,8 @@ function loop() {
 spawnMoneySigns(moneyBg, 28);
 spawnBackgroundBalls(menuBallsBg, 24);
 updateColorPreview();
+loadMusicSettings();
+loadMusicPlaylist();
 checkSession();
 loop();
 setPlayButtonState(false);
