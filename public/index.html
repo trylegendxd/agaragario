@@ -101,6 +101,25 @@
 
           <div class="friendsStatus" id="friendsStatus"></div>
         </div>
+
+        <div class="menuCard privateChatCard hidden" id="privateChatCard">
+          <div class="cardHeader">
+            <span id="privateChatTitle">Private Chat</span>
+            <button id="closePrivateChatBtn" type="button" class="miniCardBtn">Close</button>
+          </div>
+
+          <div class="privateChatMessages" id="privateChatMessages"></div>
+
+          <div class="privateChatInputRow">
+            <input
+              id="privateChatInput"
+              type="text"
+              maxlength="500"
+              placeholder="Type a private message..."
+            />
+            <button id="sendPrivateChatBtn" type="button">Send</button>
+          </div>
+        </div>
       </div>
 
       <div class="centerColumn">
@@ -187,6 +206,26 @@
         </div>
       </div>
     </div>
+
+    <div class="menuMusicPlayer" id="menuMusicPlayer">
+      <div class="musicTopRow">
+        <div class="musicNowLabel">Now Playing</div>
+        <div class="musicSongName" id="musicSongName">No song loaded</div>
+      </div>
+
+      <div class="musicControlsRow">
+        <button id="musicPrevBtn" type="button" class="musicControlBtn">⏮</button>
+        <button id="musicPlayPauseBtn" type="button" class="musicControlBtn primary">▶</button>
+        <button id="musicNextBtn" type="button" class="musicControlBtn">⏭</button>
+      </div>
+
+      <div class="musicVolumeRow">
+        <span class="musicVolumeLabel">Volume</span>
+        <input id="musicVolumeRange" type="range" min="0" max="1" step="0.01" value="0.4" />
+      </div>
+    </div>
+
+    <audio id="menuMusic" preload="auto"></audio>
 
     <div class="toastContainer" id="toastContainer"></div>
   </div>
