@@ -117,7 +117,8 @@ canvas {
 .mainPlayCard input,
 .walletCard input,
 .authPanel input,
-.friendSearchPanel input {
+.friendSearchPanel input,
+.privateChatInputRow input {
   width: 100%;
   box-sizing: border-box;
   padding: 13px 14px;
@@ -133,7 +134,8 @@ canvas {
 .mainPlayCard input:focus,
 .walletCard input:focus,
 .authPanel input:focus,
-.friendSearchPanel input:focus {
+.friendSearchPanel input:focus,
+.privateChatInputRow input:focus {
   border-color: #8fb8ea;
   box-shadow: 0 0 0 4px rgba(77, 178, 255, 0.12);
 }
@@ -186,7 +188,8 @@ canvas {
 #startMenuBtn,
 #registerBtn,
 #loginBtn,
-#logoutBtn {
+#logoutBtn,
+#sendPrivateChatBtn {
   width: 100%;
   padding: 15px 16px;
   border-radius: 16px;
@@ -257,7 +260,8 @@ canvas {
 
 .leaderboardCard,
 .friendsCard,
-.customizeCard {
+.customizeCard,
+.privateChatCard {
   overflow: hidden;
 }
 
@@ -326,12 +330,14 @@ canvas {
 .friendActions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .friendBtnAccept,
 .friendBtnAdd,
 .friendBtnDeny,
-.friendBtnRemove {
+.friendBtnRemove,
+.friendBtnChat {
   border: 0;
   border-radius: 10px;
   padding: 8px 10px;
@@ -341,7 +347,8 @@ canvas {
 }
 
 .friendBtnAdd,
-.friendBtnAccept {
+.friendBtnAccept,
+.friendBtnChat {
   background: #e8fff1;
   color: #07954b;
 }
@@ -408,6 +415,56 @@ canvas {
   background: #33c3ff;
   border: 3px solid rgba(0, 0, 0, 0.08);
   box-shadow: inset 0 3px 8px rgba(255, 255, 255, 0.28);
+}
+
+.privateChatCard {
+  padding-bottom: 16px;
+}
+
+.privateChatMessages {
+  height: 240px;
+  overflow-y: auto;
+  padding: 0 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.privateMsg {
+  max-width: 82%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  font-size: 14px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.privateMsg.me {
+  align-self: flex-end;
+  background: #e8fff1;
+  color: #0a7f43;
+}
+
+.privateMsg.them {
+  align-self: flex-start;
+  background: #eef3ff;
+  color: #2742a5;
+}
+
+.privateChatInputRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  padding: 0 16px;
+}
+
+#sendPrivateChatBtn {
+  width: auto;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: #e8fff1;
+  color: #07954b;
+  font-weight: 800;
 }
 
 .ballsBg {
@@ -639,6 +696,96 @@ canvas {
   min-height: 18px;
 }
 
+.menuMusicPlayer {
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  z-index: 50;
+  width: 290px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #d8e4f1;
+  border-radius: 20px;
+  box-shadow: 0 16px 36px rgba(59, 92, 141, 0.14);
+  padding: 14px 14px 12px;
+  backdrop-filter: blur(8px);
+}
+
+.musicTopRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.musicNowLabel {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #6a7d94;
+}
+
+.musicSongName {
+  font-size: 14px;
+  font-weight: 800;
+  color: #24364d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.musicControlsRow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.musicControlBtn {
+  width: 44px;
+  height: 44px;
+  border: 1px solid #d7e3ef;
+  border-radius: 50%;
+  background: #f7fbff;
+  color: #2a4261;
+  font-size: 18px;
+  font-weight: 900;
+  cursor: pointer;
+  transition: 0.18s ease;
+}
+
+.musicControlBtn:hover {
+  transform: translateY(-1px);
+  background: #eef5fd;
+}
+
+.musicControlBtn.primary {
+  width: 54px;
+  height: 54px;
+  background: linear-gradient(180deg, #4db2ff, #1e7ff0);
+  color: #ffffff;
+  border-color: #1e7ff0;
+  box-shadow: 0 10px 22px rgba(30, 127, 240, 0.22);
+}
+
+.musicVolumeRow {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.musicVolumeLabel {
+  font-size: 12px;
+  font-weight: 800;
+  color: #607289;
+}
+
+.musicVolumeRow input[type="range"] {
+  width: 100%;
+}
+
 .toastContainer {
   position: fixed;
   top: 18px;
@@ -666,6 +813,13 @@ canvas {
 @media (max-width: 1180px) {
   .menuShell {
     grid-template-columns: 1fr;
+    width: calc(100vw - 20px);
+    padding-bottom: 110px;
+  }
+
+  .menuMusicPlayer {
+    width: calc(100vw - 36px);
+    max-width: 360px;
   }
 }
 
@@ -676,15 +830,15 @@ canvas {
     width: auto;
   }
 
-  .menuShell {
-    width: calc(100vw - 20px);
-  }
-
   .stakeButtons {
     grid-template-columns: repeat(2, 1fr);
   }
 
   .gameLeaderboard {
     width: 210px;
+  }
+
+  .privateChatInputRow {
+    grid-template-columns: 1fr;
   }
 }
