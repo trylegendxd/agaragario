@@ -1,4 +1,5 @@
 const path = require("path");
+const fs = require("fs");
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -20,6 +21,7 @@ const io = new Server(server, {
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, "public");
+const AUDIO_DIR = path.join(PUBLIC_DIR, "audio");
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -144,6 +146,16 @@ async function initDb() {
       user_b BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (user_a, user_b)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS private_messages (
+      id BIGSERIAL PRIMARY KEY,
+      from_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      to_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      message TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
 }
@@ -510,6 +522,18 @@ async function requireAuth(req, res, next) {
   }
 }
 
+async function areFriends(userIdA, userIdB) {
+  const a = Math.min(Number(userIdA), Number(userIdB));
+  const b = Math.max(Number(userIdA), Number(userIdB));
+
+  const { rows } = await pool.query(
+    `SELECT id FROM friends WHERE user_a = $1 AND user_b = $2 LIMIT 1`,
+    [a, b]
+  );
+
+  return !!rows[0];
+}
+
 function sendFriendNotificationToUser(userId, payload) {
   const socketId = socketsByUserId.get(Number(userId));
   if (!socketId) return;
@@ -519,6 +543,48 @@ function sendFriendNotificationToUser(userId, payload) {
 
   sock.emit("friendNotification", payload);
 }
+
+function sendPrivateMessageToUser(userId, payload) {
+  const socketId = socketsByUserId.get(Number(userId));
+  if (!socketId) return;
+
+  const sock = io.sockets.sockets.get(socketId);
+  if (!sock) return;
+
+  sock.emit("privateMessage", payload);
+}
+
+function getMusicPlaylist() {
+  try {
+    if (!fs.existsSync(AUDIO_DIR)) {
+      return [];
+    }
+
+    const files = fs
+      .readdirSync(AUDIO_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name)
+      .filter((name) => name.toLowerCase().endsWith(".mp3"))
+      .sort((a, b) => a.localeCompare(b));
+
+    return files.map((filename, index) => ({
+      id: index + 1,
+      title: filename.replace(/\.mp3$/i, ""),
+      filename,
+      url: `/audio/${encodeURIComponent(filename)}`
+    }));
+  } catch (err) {
+    console.error("MUSIC PLAYLIST ERROR:", err);
+    return [];
+  }
+}
+
+app.get("/api/music/playlist", (req, res) => {
+  res.json({
+    ok: true,
+    items: getMusicPlaylist()
+  });
+});
 
 app.post("/api/register", async (req, res) => {
   try {
@@ -996,6 +1062,113 @@ app.post("/api/friends/remove", requireAuth, async (req, res) => {
   }
 });
 
+app.get("/api/private-messages/:username", requireAuth, async (req, res) => {
+  try {
+    const targetUsername = String(req.params.username || "").trim();
+    if (!targetUsername) {
+      return res.status(400).json({ error: "Missing username." });
+    }
+
+    const target = await getUserByUsername(targetUsername);
+    if (!target) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const friends = await areFriends(req.user.id, target.id);
+    if (!friends) {
+      return res.status(403).json({ error: "You can only message friends." });
+    }
+
+    const { rows } = await pool.query(
+      `
+      SELECT pm.id, pm.from_user_id, pm.to_user_id, pm.message, pm.created_at,
+             fu.username AS from_username,
+             tu.username AS to_username
+      FROM private_messages pm
+      JOIN users fu ON fu.id = pm.from_user_id
+      JOIN users tu ON tu.id = pm.to_user_id
+      WHERE
+        (pm.from_user_id = $1 AND pm.to_user_id = $2)
+        OR
+        (pm.from_user_id = $2 AND pm.to_user_id = $1)
+      ORDER BY pm.created_at ASC
+      LIMIT 100
+      `,
+      [req.user.id, target.id]
+    );
+
+    res.json({
+      ok: true,
+      items: rows.map((r) => ({
+        id: Number(r.id),
+        fromUserId: Number(r.from_user_id),
+        toUserId: Number(r.to_user_id),
+        fromUsername: r.from_username,
+        toUsername: r.to_username,
+        message: r.message,
+        createdAt: r.created_at
+      }))
+    });
+  } catch (err) {
+    console.error("GET PRIVATE MESSAGES ERROR:", err);
+    res.status(500).json({ error: "Failed to load conversation." });
+  }
+});
+
+app.post("/api/private-messages/send", requireAuth, async (req, res) => {
+  try {
+    const toUsername = String(req.body?.toUsername || "").trim();
+    const message = String(req.body?.message || "").trim().slice(0, 500);
+
+    if (!toUsername) {
+      return res.status(400).json({ error: "Missing username." });
+    }
+
+    if (!message) {
+      return res.status(400).json({ error: "Message cannot be empty." });
+    }
+
+    const target = await getUserByUsername(toUsername);
+    if (!target) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const friends = await areFriends(req.user.id, target.id);
+    if (!friends) {
+      return res.status(403).json({ error: "You can only message friends." });
+    }
+
+    const { rows } = await pool.query(
+      `
+      INSERT INTO private_messages (from_user_id, to_user_id, message)
+      VALUES ($1, $2, $3)
+      RETURNING id, created_at
+      `,
+      [req.user.id, target.id, message]
+    );
+
+    const payload = {
+      id: Number(rows[0].id),
+      fromUserId: Number(req.user.id),
+      toUserId: Number(target.id),
+      fromUsername: req.user.username,
+      toUsername: target.username,
+      message,
+      createdAt: rows[0].created_at
+    };
+
+    sendPrivateMessageToUser(target.id, payload);
+
+    res.json({
+      ok: true,
+      item: payload
+    });
+  } catch (err) {
+    console.error("SEND PRIVATE MESSAGE ERROR:", err);
+    res.status(500).json({ error: "Failed to send message." });
+  }
+});
+
 app.post("/api/game/enter", requireAuth, async (req, res) => {
   try {
     const freshUser = await getUserById(req.user.id);
@@ -1067,7 +1240,8 @@ app.get("/debug/players", (req, res) => {
       cells: b.cells.length
     })),
     food: food.length,
-    chatMessages: chatMessages.length
+    chatMessages: chatMessages.length,
+    musicTracks: getMusicPlaylist().length
   });
 });
 
@@ -1943,6 +2117,7 @@ async function start() {
 
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
+    console.log(`Music folder: ${AUDIO_DIR}`);
   });
 }
 
